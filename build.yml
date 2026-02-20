@@ -1,0 +1,25 @@
+services:
+  airflow:
+    image: blueriver97/airflow:3.1.5
+    build:
+      dockerfile: Dockerfile
+      context: .
+      args:
+        SPARK_VERSION: $SPARK_VERSION
+      platforms:
+        - linux/amd64
+        - linux/arm64/v8
+    container_name: airflow
+    hostname: airflow
+    tty: true
+    restart: always
+    entrypoint: /bin/bash
+    networks:
+      - default
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+networks:
+  default:
+    driver: bridge
+    name: service-network

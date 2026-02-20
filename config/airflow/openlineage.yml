@@ -1,0 +1,7 @@
+transport:
+  type: http
+  url: http://datahub.svc.internal:8080
+  endpoint: /openapi/openlineage/api/v1/lineage
+  auth:
+    type: api_key
+    apiKey: xxx

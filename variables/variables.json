@@ -1,0 +1,21 @@
+{
+  "AWS_ACCESS_KEY_ID": "",
+  "AWS_PROFILE": "",
+  "AWS_SECRET_ACCESS_KEY": "",
+  "BOOTSTRAP_SERVERS": "broker:19092",
+  "CATALOG": "polaris",
+  "DATAHUB_GMS_URL": "http://datahub.svc.internal:8080",
+  "DATAHUB_TOKEN": {
+    "description": "DATAHUB PAT",
+    "value": ""
+  },
+  "HADOOP_CONF_DIR": "/opt/hadoop/etc/hadoop",
+  "ICEBERG_S3_ROOT_PATH": "s3a://datalake/iceberg",
+  "PYSPARK_PYTHON": "./environment/bin/python",
+  "SCHEMA_REGISTRY": "http://schema-registry.svc.internal:8081",
+  "SPARK_DIST_CLASSPATH": "/opt/hadoop/etc/hadoop:/opt/hadoop/share/hadoop/common/lib/*:/opt/hadoop/share/hadoop/common/*:/opt/hadoop/share/hadoop/tools/lib/bundle-2.29.52.jar:/opt/hadoop/share/hadoop/tools/lib/analyticsaccelerator-s3-1.2.1.jar:/opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.4.2.jar:/opt/hadoop/share/hadoop/hdfs:/opt/hadoop/share/hadoop/hdfs/lib/*:/opt/hadoop/share/hadoop/hdfs/*:/opt/hadoop/share/hadoop/tools/lib/kafka-clients-3.9.0.jar:/opt/hadoop/share/hadoop/tools/lib/hadoop-kafka-3.4.2.jar:/opt/hadoop/share/hadoop/mapreduce/*:/opt/hadoop/share/hadoop/yarn:/opt/hadoop/share/hadoop/yarn/lib/*:/opt/hadoop/share/hadoop/yarn/*",
+  "SPARK_HOME": "/opt/spark",
+  "VAULT_PASSWORD": "",
+  "VAULT_URL": "http://vault.svc.internal:8200",
+  "VAULT_USERNAME": "admin"
+}

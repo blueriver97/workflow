@@ -1,0 +1,22 @@
+{
+  "datahub_rest_default": {
+    "conn_type": "datahub-rest",
+    "description": "Datahub Rest Sink (Password: PAT)",
+    "login": null,
+    "password": "",
+    "host": "datahub.svc.internal:8080",
+    "port": null,
+    "schema": null,
+    "extra": null
+  },
+  "spark_default": {
+    "conn_type": "spark",
+    "description": null,
+    "login": null,
+    "password": null,
+    "host": "yarn",
+    "port": null,
+    "schema": null,
+    "extra": "{\"queue\":\"default\",\"deploy-mode\":\"cluster\",\"spark-binary\":\"spark-submit\"}"
+  }
+}
