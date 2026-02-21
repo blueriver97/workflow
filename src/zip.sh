@@ -1,4 +1,4 @@
 #!/bin/bash
 
-rm -f utils.zip
+rm -rf utils.zip utils/__pycache__
 zip -r utils.zip utils

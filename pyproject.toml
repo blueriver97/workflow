@@ -7,6 +7,15 @@ requires-python = ">=3.12"      # Python 버전 요구 사항
 license = { file = "LICENSE" } # 라이센스 파일 경로 (선택 사항)
 
 dependencies = [
+    "apache-airflow==3.1.5",
+    "apache-airflow-providers-apache-spark==5.5.0",
+    "apache-airflow-providers-openlineage>=2.10.2",
+    "apache-airflow-providers-slack>=9.6.2",
+    "astronomer-cosmos>=1.13.0",
+    "boto3>=1.42.54",
+    "dbt-athena>=1.10.0",
+    "dbt-core>=1.11.6",
+    "pyspark==4.0.2",
 ]
 
 [build-system]
@@ -16,7 +25,7 @@ build-backend = "setuptools.build_meta"  # 빌드 백엔드
 [tool.setuptools]
 packages = { find = { where = ["src"] } }
 zip-safe = false                   # zip_safe 플래그
-include-package-data = true        # 패키지 데이터 포함 설정
+include-package-data = false        # 패키지 데이터 포함 설정
 
 [tool.setuptools.package-data]
 "base" = ["*.yaml"]
