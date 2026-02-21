@@ -197,4 +197,5 @@ dmypy.json
 cython_debug/
 
 *.tgz
+*.zip
 logs/

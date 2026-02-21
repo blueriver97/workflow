@@ -8,7 +8,7 @@ from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOpe
 default_args = {
     "owner": "data_engineer",
     "depends_on_past": False,
-    "retries": 1,
+    "retries": 0,
     "retry_delay": timedelta(minutes=5),
 }
 
@@ -26,13 +26,23 @@ def parse_yaml(config_file: Path):
         raise FileNotFoundError(f"Config file not found: {config_file}")
 
 
-def generate_spark_kwargs(config: dict):
+def generate_spark_kwargs(config: dict, dag_id: str):
     tables = config["job"]["tables"]
     num_partitions = config["job"]["num_partitions"]
     generated_config = []
     for table in tables:
         generated_config.append(
-            {"application_args": ["--tables", table, "--num_partitions", str(num_partitions)], "name": table}
+            {
+                "application_args": [
+                    "--config_file",
+                    f"{dag_id}.yml",
+                    "--tables",
+                    table,
+                    "--num_partitions",
+                    str(num_partitions),
+                ],
+                "name": table,
+            }
         )
     return generated_config
 
@@ -48,7 +58,7 @@ with DAG(
 ) as dag:
     config_file = Path(__file__).parent.parent / "configs" / f"{DAG_ID}.yml"
     config = parse_yaml(config_file=config_file)
-    mapped_kwargs = generate_spark_kwargs(config)
+    mapped_kwargs = generate_spark_kwargs(config, DAG_ID)
     aws_profile = config["aws"]["profile"]
     spark_conf = {
         "spark.yarn.maxAppAttempts": "1",
@@ -64,10 +74,10 @@ with DAG(
     ingest_tables = SparkSubmitOperator.partial(
         task_id="spark-submit",
         conn_id="spark_default",
-        application="/opt/airflow/src/glue_mysql_to_iceberg.py",
+        application="/opt/airflow/src/mysql_to_iceberg.py",
         py_files="/opt/airflow/src/utils.zip",
-        files=str(config_file),
         map_index_template="{{task.name}}",
+        files=str(config_file),
         conf=spark_conf,
     ).expand_kwargs(mapped_kwargs)
 
