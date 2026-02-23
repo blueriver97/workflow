@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     vault: VaultSettings
     database: DatabaseSettings
     aws: AwsSettings
-    kafka: KafkaSettings
+    kafka: KafkaSettings | None = None
 
     @classmethod
     def settings_customise_sources(
