@@ -1,0 +1,13 @@
+# Dependencies
+astronomer-cosmos
+dbt-core
+dbt-athena
+boto3
+pydantic-core
+pydantic_settings
+pydantic
+pyspark==4.0.2
+apache-airflow-providers-apache-spark==5.5.0
+apache-airflow-providers-slack
+apache-airflow-providers-openlineage
+# acryl-datahub-airflow-plugin>=1.1.0.4

@@ -15,6 +15,7 @@ dependencies = [
     "boto3>=1.42.54",
     "dbt-athena>=1.10.0",
     "dbt-core>=1.11.6",
+    "hvac>=2.4.0",
     "pyspark==4.0.2",
 ]
 
