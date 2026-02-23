@@ -2,9 +2,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from airflow import DAG
-from airflow.decorators import task
 from airflow.models import Variable
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.sdk import task
 
 default_args = {
     "owner": "data_engineer",
@@ -26,7 +26,7 @@ def get_job_configs(config_file_path: str):
     with open(path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    tables = config["job"]["table"]
+    tables = config["job"]["tables"]
     num_partitions = config["job"]["num_partition"]
 
     print(f"Generated configs for {len(tables)} tables")
