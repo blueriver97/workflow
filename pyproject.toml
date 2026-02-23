@@ -9,6 +9,7 @@ license = { file = "LICENSE" } # 라이센스 파일 경로 (선택 사항)
 dependencies = [
     "apache-airflow==3.1.5",
     "apache-airflow-providers-apache-spark==5.5.0",
+    "apache-airflow-providers-jdbc>=5.3.2",
     "apache-airflow-providers-openlineage>=2.10.2",
     "apache-airflow-providers-slack>=9.6.2",
     "astronomer-cosmos>=1.13.0",
@@ -16,6 +17,10 @@ dependencies = [
     "dbt-athena>=1.10.0",
     "dbt-core>=1.11.6",
     "hvac>=2.4.0",
+    "pandas>=3.0.1",
+    "pydantic>=2.12.5",
+    "pydantic-core>=2.41.5",
+    "pydantic-settings>=2.13.1",
     "pyspark==4.0.2",
 ]
 
@@ -111,5 +116,5 @@ docstring-code-format = false
 docstring-code-line-length = "dynamic"
 
 [[tool.mypy.overrides]]
-module = ["airflow.*", "pyspark.*", "confluent_kafka.*", "pydantic.*", "pydantic_settings.*"]
+module = ["airflow.*", "pyspark.*", "confluent_kafka.*", "pydantic.*", "pydantic_settings.*", "jaydebeapi"]
 ignore_missing_imports = true

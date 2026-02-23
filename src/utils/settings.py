@@ -105,6 +105,14 @@ class Settings(BaseSettings):
             file_secret_settings,
         )
 
+    @property
+    def CATALOG(self):
+        return self.aws.catalog
+
+    @property
+    def WAREHOUSE(self):
+        return "s3a://" + self.aws.s3_bucket + self.aws.iceberg_path
+
 
 # if __name__ == "__main__":
 #     settings = Settings(_env_file="test.env")
