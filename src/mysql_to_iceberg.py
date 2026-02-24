@@ -105,7 +105,7 @@ def process_mysql_to_iceberg(
     writer = (
         jdbc_df.writeTo(full_table_name)
         .using("iceberg")
-        .tableProperty("location", f"{config.ICEBERG_S3_ROOT_PATH}/{bronze_schema}/{target_table}")
+        .tableProperty("location", f"{config.WAREHOUSE}/{bronze_schema}/{target_table}")
         .tableProperty("format-version", "2")
     )
 

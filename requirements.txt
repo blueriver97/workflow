@@ -6,6 +6,7 @@ boto3
 pydantic-core
 pydantic_settings
 pydantic
+hvac
 pandas
 pyspark==4.0.2
 apache-airflow-providers-apache-spark==5.5.0

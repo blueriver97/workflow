@@ -75,7 +75,7 @@ with DAG(
             "SPARK_HOME": "{{ var.value.SPARK_HOME }}",
             "HADOOP_CONF_DIR": "{{ var.value.HADOOP_CONF_DIR }}",
             "PYSPARK_PYTHON": "{{ var.value.PYSPARK_PYTHON }}",
-            "SPARK_DIST_CLASSPATH": "{{ var.value.SPARK_DIST_CLASSPATH }}",
+            # "SPARK_DIST_CLASSPATH": "{{ var.value.SPARK_DIST_CLASSPATH }}",
         }
 
     def generate_application_env():
@@ -138,7 +138,7 @@ with DAG(
         env_vars=env_vars,
         conf=spark_conf,
         openlineage_inject_parent_job_info=True,
-        openlineage_inject_transport_info=False,
+        openlineage_inject_transport_info=True,
     ).expand_kwargs(mapped_configs)
 
 # if __name__ == "__main__":
