@@ -94,8 +94,9 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        dotenv_data = dotenv_settings()
-        vault_config = dotenv_data.get("vault", {})
+        env_data = env_settings()
+        env_data.update(dotenv_settings())
+        vault_config = env_data.get("vault", {})
         vault_settings = VaultSettingsSource(settings_cls, vault_config)
         return (
             init_settings,

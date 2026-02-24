@@ -34,7 +34,7 @@ class DatabaseSettings(BaseModel):
 def get_vault(config: VaultSettings):
     url = config.url
     username = config.username
-    password = config.password
+    password = config.password.get_secret_value()
     secret_path = config.secret_path
 
     if not all([url, username, password, secret_path]):
@@ -50,19 +50,17 @@ def get_vault(config: VaultSettings):
 
         secret = response["data"]["data"]
         return {
-            "database": {
-                "host": secret.get("host"),
-                "port": int(secret.get("port", 0)),
-                "user": secret.get("user"),
-                "password": secret.get("password"),
-            }
+            "host": secret.get("host"),
+            "port": int(secret.get("port", 0)),
+            "user": secret.get("user"),
+            "password": secret.get("password"),
         }
     except Exception as e:
         print(f"An error occurred during Vault initialization: {e}")
         return {}
 
 
-def get_jdbc_options(config: DatabaseSettings, database: str) -> dict[str, str]:
+def get_jdbc_options(config: DatabaseSettings, database: str | None = None) -> dict[str, str]:
     """Generates JDBC connection options based on the database type in settings."""
     options: dict[str, str] = {}
 
@@ -153,15 +151,11 @@ def get_primary_keys(
 
         if config.type == DatabaseType.MYSQL:
             query = f"""
-                SELECT
-                    TABLE_SCHEMA,
-                    TABLE_NAME,
-                    COLUMN_NAME,
-                    ORDINAL_POSITION
-                FROM information_schema.COLUMNS
+                SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, SEQ_IN_INDEX
+                FROM information_schema.STATISTICS
                 WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) IN ({placeholders})
-                  AND COLUMN_KEY = 'PRI'
-                ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
+                  AND INDEX_NAME = 'PRIMARY'
+                ORDER BY TABLE_SCHEMA, TABLE_NAME, SEQ_IN_INDEX
             """
 
         elif config.type == DatabaseType.SQLSERVER:
@@ -176,7 +170,6 @@ def get_primary_keys(
                   ON c.CONSTRAINT_NAME = t.CONSTRAINT_NAME
                 WHERE t.CONSTRAINT_TYPE = 'PRIMARY KEY'
                   AND CONCAT(t.TABLE_CATALOG, '.dbo.', t.TABLE_NAME) IN ({placeholders})
-                ORDER BY t.TABLE_CATALOG, t.TABLE_NAME, c.ORDINAL_POSITION
             """
 
         else:

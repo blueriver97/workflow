@@ -14,7 +14,7 @@ default_args = {
 }
 
 
-@task
+@task(task_id="get_job_configs")
 def get_job_configs(config_file_path: str):
     """런타임에 YAML 파일을 읽고 Spark 실행 인자를 생성함"""
     import yaml  # 워커에서만 필요하므로 함수 내부 임포트
@@ -26,9 +26,28 @@ def get_job_configs(config_file_path: str):
     with open(path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
+    database = config["job"]["database"]
     tables = config["job"]["tables"]
     num_partitions = config["job"]["num_partition"]
+    print(database, tables, num_partitions)
 
+    # vault_config = VaultSettings(
+    #     url=Variable.get("VAULT_URL"),
+    #     username=Variable.get("VAULT_USERNAME"),
+    #     password=Variable.get("VAULT_PASSWORD"),
+    #     secret_path="secret/data/user/database/local-mysql"
+    # )
+    # database_configs = get_vault(vault_config)
+    # database_configs = DatabaseSettings(
+    #     type=DatabaseType.MYSQL,
+    #     host=database_configs["host"],
+    #     port=database_configs["port"],
+    #     user=database_configs["user"],
+    #     password=database_configs["password"],
+    # )
+    # pk_cols = get_primary_keys(database_configs, database, tables, "/Users/kimyj/workspace/workflow/download/mysql-connector-j-8.0.33.jar")
+    # schema_info = get_table_schema_info(database_configs, tables, "/Users/kimyj/workspace/workflow/download/mysql-connector-j-8.0.33.jar")
+    # partition_cols = get_partition_key_info(database_configs, tables, "/Users/kimyj/workspace/workflow/download/mysql-connector-j-8.0.33.jar")
     print(f"Generated configs for {len(tables)} tables")
 
     # expand_kwargs가 기대하는 리스트 형식으로 반환
@@ -85,6 +104,9 @@ with DAG(
     env_vars.update(generate_application_env())
 
     aws_profile = Variable.get("AWS_PROFILE")
+    datahub_gms_url = Variable.get("DATAHUB_GMS_URL")
+    datahub_token = Variable.get("DATAHUB_TOKEN")
+
     spark_conf = {
         "spark.yarn.maxAppAttempts": "1",
         "spark.driver.cores": "1",
@@ -94,6 +116,16 @@ with DAG(
         "spark.executor.instances": "1",
         "spark.yarn.appMasterEnv.AWS_PROFILE": aws_profile,
         "spark.executorEnv.AWS_PROFILE": aws_profile,
+        # OpenLineage Spark Listener 설정
+        "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+        # OpenLineage Transport 설정
+        "spark.openlineage.transport.type": "http",
+        "spark.openlineage.transport.url": datahub_gms_url,
+        "spark.openlineage.transport.endpoint": "/openapi/openlineage/api/v1/lineage",
+        "spark.openlineage.transport.auth.type": "api_key",
+        "spark.openlineage.transport.auth.apiKey": datahub_token,
+        "spark.openlineage.appName": "spark.production_cluster.glue_mysql_to_iceberg",
+        "spark.openlineage.namespace": "production_cluster",
     }
 
     ingest_tables = SparkSubmitOperator.partial(
@@ -105,6 +137,8 @@ with DAG(
         map_index_template="{{task.name}}",
         env_vars=env_vars,
         conf=spark_conf,
+        openlineage_inject_parent_job_info=True,
+        openlineage_inject_transport_info=False,
     ).expand_kwargs(mapped_configs)
 
 # if __name__ == "__main__":

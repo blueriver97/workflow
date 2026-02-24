@@ -1,5 +1,6 @@
 job:
   num_partition: 1
+  database: store
   tables:
     - store.tb_lower
     - store.TB_UPPER

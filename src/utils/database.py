@@ -1,226 +1,76 @@
-# src/utils/database.py
-import re
-from collections import OrderedDict
-from enum import StrEnum
+import pyspark.sql.functions as F  # noqa
+from abc import ABC, abstractmethod
 from textwrap import dedent
-
-import pyspark.sql.functions as F
-import pyspark.sql.types as T
+from collections import OrderedDict
 from pyspark.sql import DataFrame, SparkSession
 
-from .settings import Settings
 
-
-class DatabaseType(StrEnum):
+class BaseDatabaseManager(ABC):
     """
-    Enum for supported database types.
+    데이터베이스 관리를 위한 추상 베이스 클래스
     """
 
-    MYSQL = "mysql"
-    SQLSERVER = "sqlserver"
+    def __init__(self, config):
+        # 설정 객체 초기화
+        self.config = config
+
+    def _execute_jdbc_query(self, spark: SparkSession, options: dict[str, str], query: str) -> DataFrame:
+        # JDBC 쿼리 실행 및 데이터프레임 반환
+        print(f"Executing JDBC query on {self.config.database.type}")
+        return spark.read.format("jdbc").options(**options).option("query", query).load()
+
+    @abstractmethod
+    def get_jdbc_options(self, database: str = "") -> dict[str, str]:
+        # DB별 JDBC 옵션 생성
+        pass
+
+    @abstractmethod
+    def get_primary_key(self, spark: SparkSession, table_name: str) -> list[str]:
+        # PK 정보 조회
+        pass
+
+    @abstractmethod
+    def get_partition_key(self, spark: SparkSession, table_name: str) -> str | None:
+        # 파티션 키 후보 조회
+        pass
+
+    @abstractmethod
+    def get_schema(self, spark: SparkSession, table_name: str) -> dict[str, str]:
+        # 테이블 스키마 정보 조회
+        pass
 
 
-# --- Type Mappings ---
-# 데이터베이스별 데이터 타입을 Spark 타입으로 매핑합니다.
-# This dictionary maps database-specific data types to Spark's DataType.
-MYSQL_TYPE_MAPPING = {
-    "char": T.StringType(),
-    "varchar": T.StringType(),
-    "text": T.StringType(),
-    "tinyint": T.IntegerType(),
-    "smallint": T.IntegerType(),
-    "int": T.IntegerType(),
-    "int unsigned": T.LongType(),
-    "bigint": T.LongType(),
-    "float": T.DoubleType(),
-    "double": T.DoubleType(),
-    "decimal": lambda p, s: T.DecimalType(precision=int(p), scale=int(s)),
-    "boolean": T.BooleanType(),
-    "blob": T.BinaryType(),
-    "time": T.TimestampType(),
-    "date": T.DateType(),
-    "datetime": T.TimestampType(),
-    "timestamp": T.TimestampType(),
-}
-MSSQL_TYPE_MAPPING = {
-    "bigint": T.LongType(),
-    "int": T.IntegerType(),
-    "smallint": T.ShortType(),
-    "tinyint": T.ByteType(),
-    "bit": T.BooleanType(),
-    "decimal": T.DecimalType(38, 10),
-    "numeric": T.DecimalType(38, 10),
-    "money": T.DecimalType(19, 4),
-    "smallmoney": T.DecimalType(10, 4),
-    "float": T.DoubleType(),
-    "real": T.FloatType(),
-    "date": T.DateType(),
-    "datetime": T.TimestampType(),
-    "datetime2": T.TimestampType(),
-    "smalldatetime": T.TimestampType(),
-    "time": T.StringType(),
-    "char": T.StringType(),
-    "varchar": T.StringType(),
-    "text": T.StringType(),
-    "nchar": T.StringType(),
-    "nvarchar": T.StringType(),
-    "ntext": T.StringType(),
-    "binary": T.BinaryType(),
-    "varbinary": T.BinaryType(),
-    "image": T.BinaryType(),
-    "uniqueidentifier": T.StringType(),
-}
-
-
-def convert_db_type_to_spark(column_type: str, db_type: str) -> T.DataType:
-    """Converts a database-specific column type string to a Spark DataType."""
-    type_map = MYSQL_TYPE_MAPPING if db_type == DatabaseType.MYSQL else MSSQL_TYPE_MAPPING
-    type_name_match = re.match(r"^\w+", column_type.lower())
-
-    if type_name_match:
-        type_name = type_name_match.group(0)
-        if type_name == "decimal" and db_type == DatabaseType.MYSQL:
-            params = re.findall(r"\d+", column_type)
-            if len(params) >= 2:
-                return type_map[type_name](params[0], params[1])
-            elif len(params) == 1:
-                return type_map[type_name](params[0], 0)
-
-        return type_map.get(type_name, T.StringType())
-
-    return T.StringType()
-
-
-# --- JDBC Utilities ---
-def get_jdbc_options(config: Settings, database: str | None = None) -> dict[str, str]:
-    """Generates JDBC connection options based on the database type in settings."""
-    options: dict[str, str] = {}
-
-    if config.DB_TYPE == DatabaseType.MYSQL:
-        db_name = database if database else ""
-        options["url"] = f"jdbc:mysql://{config.DB_HOST}:{config.DB_PORT}/{db_name}?zeroDateTimeBehavior=convertToNull"
-        options["driver"] = "com.mysql.cj.jdbc.Driver"
-    elif config.DB_TYPE == DatabaseType.SQLSERVER:
-        db_prop = f";databaseName={database}" if database else ""
-        options["url"] = f"jdbc:sqlserver://{config.DB_HOST}:{config.DB_PORT}{db_prop};encrypt=false;"
-        options["driver"] = "com.microsoft.sqlserver.jdbc.SQLServerDriver"
-    else:
-        raise ValueError(f"Unsupported database type: {config.DB_TYPE}")
-
-    # 사용자 정보가 있을 경우에만 딕셔너리에 추가합니다.
-    # Only add user and password to the dictionary if they exist.
-    if config.DB_USER:
-        options["user"] = config.DB_USER
-    if config.DB_PASSWORD:
-        options["password"] = config.DB_PASSWORD
-
-    return options
-
-
-def _execute_jdbc_query(spark: SparkSession, options: dict[str, str], query: str) -> DataFrame:
-    """Executes a JDBC query and returns the result as a Spark DataFrame."""
-    return spark.read.format("jdbc").options(**options).option("query", query).load()
-
-
-# --- Metadata Retrieval ---
-def get_primary_keys(spark: SparkSession, config: Settings) -> dict[str, list[str]]:
-    """Retrieves primary key information for the specified tables."""
-    if not config.TABLE_LIST:
-        return {}
-
-    db_name = (
-        config.TABLE_LIST[0].split(".")[0] if config.TABLE_LIST and config.DB_TYPE == DatabaseType.SQLSERVER else None
-    )
-
-    if config.DB_TYPE == DatabaseType.MYSQL:
-        query = dedent(f"""
-            SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION
-            FROM information_schema.COLUMNS
-            WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) IN {config.TABLE_STR} AND COLUMN_KEY = 'PRI'
-        """)
-    elif config.DB_TYPE == DatabaseType.SQLSERVER:
-        # MSSQL의 경우, 각 데이터베이스 컨텍스트에서 쿼리를 실행해야 할 수 있습니다.
-        # This query assumes it will be run in the context of the correct database for MSSQL.
-        query = dedent(f"""
-            SELECT t.TABLE_CATALOG AS TABLE_SCHEMA, t.TABLE_NAME, c.COLUMN_NAME, c.ORDINAL_POSITION
-            FROM {db_name}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS t
-            JOIN {db_name}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE c ON c.CONSTRAINT_NAME = t.CONSTRAINT_NAME
-            WHERE t.CONSTRAINT_TYPE = 'PRIMARY KEY'
-              AND CONCAT(t.TABLE_CATALOG, '.dbo.', t.TABLE_NAME) IN {config.TABLE_STR}
-        """)
-    else:
-        raise ValueError(f"Unsupported database type: {config.DB_TYPE}")
-
-    options = get_jdbc_options(config, db_name)
-    df = _execute_jdbc_query(spark, options, query).orderBy("TABLE_SCHEMA", "TABLE_NAME", "ORDINAL_POSITION")
-
-    pk_info = df.groupBy("TABLE_SCHEMA", "TABLE_NAME").agg(F.collect_list("COLUMN_NAME").alias("COLUMNS"))
-
-    if config.DB_TYPE == DatabaseType.SQLSERVER:
-        return {f"{row['TABLE_SCHEMA']}.dbo.{row['TABLE_NAME']}": row["COLUMNS"] for row in pk_info.collect()}
-
-    return {f"{row['TABLE_SCHEMA']}.{row['TABLE_NAME']}": row["COLUMNS"] for row in pk_info.collect()}
-
-
-def get_table_schema_info(spark: SparkSession, config: Settings) -> dict[str, dict[str, str]]:
-    """Retrieves column schema information for the specified tables."""
-    if not config.TABLE_LIST:
-        return {}
-
-    db_name = (
-        config.TABLE_LIST[0].split(".")[0] if config.TABLE_LIST and config.DB_TYPE == DatabaseType.SQLSERVER else None
-    )
-
-    if config.DB_TYPE == DatabaseType.MYSQL:
-        query = dedent(f"""
-            SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, ORDINAL_POSITION
-            FROM information_schema.COLUMNS
-            WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) IN {config.TABLE_STR}
-        """)
-    elif config.DB_TYPE == DatabaseType.SQLSERVER:
-        query = dedent(f"""
-            SELECT TABLE_CATALOG AS TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE AS COLUMN_TYPE, ORDINAL_POSITION
-            FROM {db_name}.INFORMATION_SCHEMA.COLUMNS
-            WHERE CONCAT(TABLE_CATALOG, '.dbo.', TABLE_NAME) IN {config.TABLE_STR}
-        """)
-    else:
-        raise ValueError(f"Unsupported database type: {config.DB_TYPE}")
-
-    options = get_jdbc_options(config, db_name)
-    df = _execute_jdbc_query(spark, options, query).orderBy("TABLE_SCHEMA", "TABLE_NAME", "ORDINAL_POSITION")
-
-    # 테이블별 컬럼 dict 생성
-    schema_info: dict[tuple[str, str], dict[str, str]] = {}
-    for row in df.collect():
-        table_name_tpl = (row.TABLE_SCHEMA, row.TABLE_NAME)
-        if table_name_tpl not in schema_info:
-            schema_info[table_name_tpl] = OrderedDict()
-        schema_info[table_name_tpl][row.COLUMN_NAME] = row.COLUMN_TYPE
-
-    # MSSQL의 경우 'dbo' 스키마를 이름에 포함시켜 일관성을 유지합니다.
-    # For MSSQL, include the 'dbo' schema in the name for consistency.
-    if config.DB_TYPE == DatabaseType.SQLSERVER:
-        return {f"{schema}.dbo.{table}": cols for (schema, table), cols in schema_info.items()}
-
-    return {f"{schema}.{table}": cols for (schema, table), cols in schema_info.items()}
-
-
-def get_partition_key_info(spark: SparkSession, config: Settings, database: str | None = None) -> dict[str, str]:
+class MySQLManager(BaseDatabaseManager):
     """
-    지정된 테이블의 파티션 키를 조회합니다.
-    DB 유형에 따라 다른 쿼리를 실행합니다.
+    MySQL 전용 관리 클래스
     """
-    if not config.TABLE_LIST:
-        return {}
 
-    jdbc_options = get_jdbc_options(config, database)
-    table_str = (
-        config.get_table_str_for_db(database)
-        if database and config.DB_TYPE == DatabaseType.SQLSERVER
-        else config.TABLE_STR
-    )
+    def get_jdbc_options(self, database: str = "") -> dict[str, str]:
+        # MySQL 연결 옵션 생성
+        db = self.config.database
+        options = {
+            "url": f"jdbc:mysql://{db.host}:{db.port}/{database}?zeroDateTimeBehavior=convertToNull",
+            "driver": "com.mysql.cj.jdbc.Driver",
+            "user": db.user,
+            "password": db.password.get_secret_value(),
+        }
+        return options
 
-    if config.DB_TYPE == DatabaseType.MYSQL:
+    def get_primary_key(self, spark: SparkSession, table_name: str) -> list[str]:
+        options = self.get_jdbc_options()
+        query = dedent(f"""
+            SELECT COLUMN_NAME
+            FROM information_schema.STATISTICS
+            WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) = '{table_name}'
+              AND INDEX_NAME = 'PRIMARY'
+            ORDER BY SEQ_IN_INDEX
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        return [row.COLUMN_NAME for row in df.collect()]
+
+    def get_partition_key(self, spark: SparkSession, table_name: str) -> str | None:
+        # 분산 처리를 위한 파티션 키 자동 탐색 (Auto_increment 또는 숫자형 우선)
+        options = self.get_jdbc_options()
         query = dedent(f"""
             SELECT c.TABLE_SCHEMA, c.TABLE_NAME, c.COLUMN_NAME
             FROM INFORMATION_SCHEMA.COLUMNS AS c
@@ -229,7 +79,7 @@ def get_partition_key_info(spark: SparkSession, config: Settings, database: str 
                             , MIN(ORDINAL_POSITION)                                                       AS min_ordinal
                             , MIN(CASE WHEN EXTRA = 'auto_increment' THEN ORDINAL_POSITION ELSE NULL END) AS extra_ordinal
                        FROM INFORMATION_SCHEMA.COLUMNS
-                       WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) IN {table_str}
+                       WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) = '{table_name}'
                               AND (DATA_TYPE IN ('int', 'bigint', 'date', 'datetime', 'timestamp') OR EXTRA LIKE 'auto_increment')
                        GROUP BY TABLE_SCHEMA, TABLE_NAME) AS t
                       ON c.TABLE_SCHEMA = t.TABLE_SCHEMA
@@ -237,33 +87,81 @@ def get_partition_key_info(spark: SparkSession, config: Settings, database: str 
                           AND (c.ORDINAL_POSITION = COALESCE(t.extra_ordinal, t.min_ordinal))
             ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION
         """)
-    elif config.DB_TYPE == DatabaseType.SQLSERVER:
-        query = dedent(f"""
-            SELECT t.DB_NAME AS TABLE_SCHEMA
-                 , c.TABLE_NAME
-                 , c.COLUMN_NAME
-            FROM INFORMATION_SCHEMA.COLUMNS AS c
-                     JOIN (SELECT d.name                                                                   AS DB_NAME
-                                , TABLE_SCHEMA
-                                , TABLE_NAME
-                                , MIN(ORDINAL_POSITION)                                                    AS min_ordinal
-                                , MIN(CASE
-                                          WHEN COLUMNPROPERTY(OBJECT_ID(CONCAT(TABLE_SCHEMA, '.', TABLE_NAME)), COLUMN_NAME,
-                                                              'IsIdentity') = 1 THEN ORDINAL_POSITION END) AS extra_ordinal
-                           FROM INFORMATION_SCHEMA.COLUMNS
-                                    JOIN sys.databases AS d ON d.database_id = DB_ID()
-                           WHERE (DATA_TYPE IN ('date', 'datetime', 'datetime2', 'timestamp') OR
-                                  COLUMNPROPERTY(OBJECT_ID(CONCAT(TABLE_SCHEMA, '.', TABLE_NAME)), COLUMN_NAME, 'IsIdentity') = 1)
-                             AND CONCAT(d.name, '.', TABLE_SCHEMA, '.', TABLE_NAME) IN {table_str}
-                           GROUP BY D.name, TABLE_SCHEMA, TABLE_NAME) AS t
-                          ON c.TABLE_SCHEMA = t.TABLE_SCHEMA
-                              AND c.TABLE_NAME = t.TABLE_NAME
-                              AND (c.ORDINAL_POSITION = COALESCE(t.extra_ordinal, t.min_ordinal))
-            ORDER BY t.DB_NAME, c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION
-            OFFSET 0 ROWS
-        """)
-    else:
-        raise ValueError(f"Unsupported database type: {config.DB_TYPE}")
+        df = self._execute_jdbc_query(spark, options, query)
+        row = df.first()
+        return row.COLUMN_NAME if row else None
 
-    df = _execute_jdbc_query(spark, jdbc_options, query)
-    return {f"{row['TABLE_SCHEMA']}.{row['TABLE_NAME']}": row["COLUMN_NAME"] for row in df.collect()}
+    def get_schema(self, spark: SparkSession, table_name: str) -> dict[str, str]:
+        # Spark 데이터 타입 매핑을 포함한 스키마 조회
+        options = self.get_jdbc_options()
+        query = dedent(f"""
+            SELECT COLUMN_NAME, COLUMN_TYPE
+            FROM information_schema.COLUMNS
+            WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) = '{table_name}'
+            ORDER BY ORDINAL_POSITION
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        return OrderedDict([(row.COLUMN_NAME, row.COLUMN_TYPE) for row in df.collect()])
+
+
+class SQLServerManager(BaseDatabaseManager):
+    """
+    SQL Server 전용 관리 클래스
+    """
+
+    def get_jdbc_options(self, database: str | None = None) -> dict[str, str]:
+        # MSSQL 연결 옵션 생성 (encrypt=false 기본값 설정)
+        db = self.config.database
+        db_prop = f";databaseName={database}" if database else ""
+        options = {
+            "url": f"jdbc:sqlserver://{db.host}:{db.port}{db_prop};encrypt=false;",
+            "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver",
+            "user": db.user,
+            "password": db.password.get_secret_value(),
+        }
+        return options
+
+    def get_primary_key(self, spark: SparkSession, table_name: str) -> list[str]:
+        # MSSQL PK 조회 (Catalog.Schema.Table 형식 대응)
+        db_name = table_name.split(".")[0]
+        options = self.get_jdbc_options(db_name)
+        query = dedent(f"""
+            SELECT c.COLUMN_NAME
+            FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS t
+            JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE c ON c.CONSTRAINT_NAME = t.CONSTRAINT_NAME
+            WHERE t.CONSTRAINT_TYPE = 'PRIMARY KEY'
+              AND CONCAT(t.TABLE_CATALOG, '.dbo.', t.TABLE_NAME) = '{table_name}'
+            ORDER BY c.ORDINAL_POSITION
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        return [row.COLUMN_NAME for row in df.collect()]
+
+    def get_partition_key(self, spark: SparkSession, table_name: str) -> str | None:
+        # MSSQL IsIdentity 또는 날짜/숫자형 기반 파티션 키 탐색
+        db_name = table_name.split(".")[0]
+        options = self.get_jdbc_options(db_name)
+        query = dedent(f"""
+            SELECT TOP 1 c.COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS AS c
+            WHERE CONCAT(TABLE_CATALOG, '.dbo.', TABLE_NAME) = '{table_name}'
+              AND (DATA_TYPE IN ('date', 'datetime', 'datetime2', 'timestamp') OR
+                   COLUMNPROPERTY(OBJECT_ID(CONCAT(TABLE_SCHEMA, '.', TABLE_NAME)), COLUMN_NAME, 'IsIdentity') = 1)
+            ORDER BY (CASE WHEN COLUMNPROPERTY(OBJECT_ID(CONCAT(TABLE_SCHEMA, '.', TABLE_NAME)), COLUMN_NAME, 'IsIdentity') = 1 THEN 0 ELSE 1 END),
+                     ORDINAL_POSITION
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        row = df.first()
+        return row.COLUMN_NAME if row else None
+
+    def get_schema(self, spark: SparkSession, table_name: str) -> dict[str, str]:
+        # MSSQL 데이터 타입 조회 및 정렬
+        db_name = table_name.split(".")[0]
+        options = self.get_jdbc_options(db_name)
+        query = dedent(f"""
+            SELECT COLUMN_NAME, DATA_TYPE AS COLUMN_TYPE
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE CONCAT(TABLE_CATALOG, '.dbo.', TABLE_NAME) = '{table_name}'
+            ORDER BY ORDINAL_POSITION
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        return OrderedDict([(row.COLUMN_NAME, row.COLUMN_TYPE) for row in df.collect()])
