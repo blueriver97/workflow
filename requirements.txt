@@ -8,9 +8,10 @@ pydantic_settings
 pydantic
 hvac
 pandas
-pyspark==4.0.2
+pyspark==4.0.1
 apache-airflow-providers-apache-spark==5.5.0
 apache-airflow-providers-jdbc
 apache-airflow-providers-slack
 apache-airflow-providers-openlineage
-# acryl-datahub-airflow-plugin>=1.1.0.4
+acryl-datahub-airflow-plugin>=1.1.0.4
+acryl-datahub-classify

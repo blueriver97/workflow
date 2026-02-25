@@ -7,6 +7,8 @@ requires-python = ">=3.12"      # Python 버전 요구 사항
 license = { file = "LICENSE" } # 라이센스 파일 경로 (선택 사항)
 
 dependencies = [
+    "acryl-datahub-airflow-plugin[airflow3]>=1.1.0.4",
+    "acryl-datahub-classify>=0.0.12",
     "apache-airflow==3.1.5",
     "apache-airflow-providers-apache-spark==5.5.0",
     "apache-airflow-providers-jdbc>=5.3.2",
@@ -118,5 +120,5 @@ docstring-code-format = false
 docstring-code-line-length = "dynamic"
 
 [[tool.mypy.overrides]]
-module = ["airflow.*", "pyspark.*", "confluent_kafka.*", "pydantic.*", "pydantic_settings.*", "jaydebeapi"]
+module = ["airflow.*", "pyspark.*", "confluent_kafka.*", "pydantic.*", "pydantic_settings.*", "jaydebeapi", "datahub.*"]
 ignore_missing_imports = true
