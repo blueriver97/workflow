@@ -103,7 +103,6 @@ with DAG(
     catchup=False,
     # DAG 레벨에 콜백 등록 (DAG 전체 실패 시 1회 호출)
     on_failure_callback=slack_notifier.send_failure,
-    on_retry_callback=slack_notifier.send_retry,
     on_success_callback=slack_notifier.send_recovery,
 ) as dag:
     config_path = str(Path(__file__).parent.parent / "configs" / f"{DAG_ID}.yml")
