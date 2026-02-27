@@ -7,6 +7,7 @@ pydantic-core
 pydantic_settings
 pydantic
 hvac
+redis
 pandas
 pyspark==4.0.1
 apache-airflow-providers-apache-spark==5.5.0

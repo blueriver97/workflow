@@ -5,13 +5,20 @@ import yaml
 from airflow import DAG
 from airflow.models import Variable
 from airflow.sdk import task
+from alerts.slack_notifier import SlackNotifier
 from operators.custom_spark import CustomSparkSubmitOperator
 
 DAG_ID = Path(__file__).name.removesuffix(".py")
+
+# Initialize Notifier
+slack_notifier = SlackNotifier(
+    channel="#data-alerts", conn_id="slack_api", redis_host="redis", redis_port=6379, redis_db=0
+)
+
 default_args = {
     "owner": "data_engineer",
     "depends_on_past": False,
-    "retries": 0,
+    "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
 
@@ -94,13 +101,16 @@ with DAG(
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
+    # DAG 레벨에 콜백 등록 (DAG 전체 실패 시 1회 호출)
+    on_failure_callback=slack_notifier.send_failure,
+    on_retry_callback=slack_notifier.send_retry,
+    on_success_callback=slack_notifier.send_recovery,
 ) as dag:
     config_path = str(Path(__file__).parent.parent / "configs" / f"{DAG_ID}.yml")
     with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     mapped_configs_list = get_mapped_configs(config)
-    # inout_data = get_inlets_outlets(config)
 
     env_vars = generate_env()
     env_vars.update(generate_application_env())

@@ -18,5 +18,15 @@
     "port": null,
     "schema": null,
     "extra": "{\"queue\":\"default\",\"deploy-mode\":\"cluster\",\"spark-binary\":\"spark-submit\"}"
+  },
+  "slack_api": {
+    "conn_type": "slack",
+    "description": "Slack API Connection",
+    "login": null,
+    "password": "",
+    "host": null,
+    "port": null,
+    "schema": null,
+    "extra": "{\n  \"timeout\": null,\n  \"base_url\": null,\n  \"proxy\": null\n}"
   }
 }
