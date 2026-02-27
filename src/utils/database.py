@@ -60,10 +60,9 @@ class MySQLManager(BaseDatabaseManager):
         options = self.get_jdbc_options()
         query = dedent(f"""
             SELECT COLUMN_NAME
-            FROM information_schema.STATISTICS
-            WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) = '{table_name}'
-              AND INDEX_NAME = 'PRIMARY'
-            ORDER BY SEQ_IN_INDEX
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) = '{table_name}' AND CONSTRAINT_NAME = 'PRIMARY'
+            ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
         """)
         df = self._execute_jdbc_query(spark, options, query)
         return [row.COLUMN_NAME for row in df.collect()]
