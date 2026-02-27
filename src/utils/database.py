@@ -39,6 +39,11 @@ class BaseDatabaseManager(ABC):
         # 테이블 스키마 정보 조회
         pass
 
+    @abstractmethod
+    def get_metadata(self, spark: SparkSession, table_name: str) -> dict[str, str]:
+        # 테이블 메타데이터 조회
+        pass
+
 
 class MySQLManager(BaseDatabaseManager):
     """
@@ -102,6 +107,17 @@ class MySQLManager(BaseDatabaseManager):
         df = self._execute_jdbc_query(spark, options, query)
         return OrderedDict([(row.COLUMN_NAME, row.COLUMN_TYPE) for row in df.collect()])
 
+    def get_metadata(self, spark: SparkSession, table_name: str) -> dict[str, str]:
+        options = self.get_jdbc_options()
+        query = dedent(f"""
+            SELECT TABLE_ROWS
+                 , ROUND(((data_length + index_length) / 1024.0 / 1024.0), 0) AS 'TABLE_SIZE'
+            FROM information_schema.TABLES
+            WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) = '{table_name}'
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        return {col.lower(): str(row[col]) for col in df.columns for row in df.collect()}
+
 
 class SQLServerManager(BaseDatabaseManager):
     """
@@ -125,14 +141,14 @@ class SQLServerManager(BaseDatabaseManager):
         db_name = table_name.split(".")[0]
         options = self.get_jdbc_options(db_name)
         query = dedent(f"""
-            SELECT c.COLUMN_NAME
+            SELECT t.TABLE_CATALOG AS TABLE_SCHEMA, t.TABLE_NAME, c.COLUMN_NAME, c.ORDINAL_POSITION
             FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS t
-            JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE c ON c.CONSTRAINT_NAME = t.CONSTRAINT_NAME
+                JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE c ON c.CONSTRAINT_NAME = t.CONSTRAINT_NAME
             WHERE t.CONSTRAINT_TYPE = 'PRIMARY KEY'
               AND CONCAT(t.TABLE_CATALOG, '.dbo.', t.TABLE_NAME) = '{table_name}'
-            ORDER BY c.ORDINAL_POSITION
         """)
         df = self._execute_jdbc_query(spark, options, query)
+        df = df.sort("TABLE_SCHEMA", "TABLE_NAME", "ORDINAL_POSITION")
         return [row.COLUMN_NAME for row in df.collect()]
 
     def get_partition_key(self, spark: SparkSession, table_name: str) -> str | None:
@@ -157,10 +173,32 @@ class SQLServerManager(BaseDatabaseManager):
         db_name = table_name.split(".")[0]
         options = self.get_jdbc_options(db_name)
         query = dedent(f"""
-            SELECT COLUMN_NAME, DATA_TYPE AS COLUMN_TYPE
+            SELECT COLUMN_NAME, DATA_TYPE AS COLUMN_TYPE, ORDINAL_POSITION
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE CONCAT(TABLE_CATALOG, '.dbo.', TABLE_NAME) = '{table_name}'
-            ORDER BY ORDINAL_POSITION
         """)
         df = self._execute_jdbc_query(spark, options, query)
+        df = df.sort("ORDINAL_POSITION")
         return OrderedDict([(row.COLUMN_NAME, row.COLUMN_TYPE) for row in df.collect()])
+
+    def get_metadata(self, spark: SparkSession, table_name: str) -> dict[str, str]:
+        db_name, _, table_name = table_name.split(".")
+        options = self.get_jdbc_options(db_name)
+        query = dedent(f"""
+            SELECT p.rows        AS TABLE_ROWS,
+                   CAST(
+                           (SUM(a.total_pages) * 8.0) / 1024
+                       AS FLOAT) AS TABLE_SIZE
+            FROM sys.tables AS t
+                     INNER JOIN sys.indexes AS i
+                                ON t.object_id = i.object_id
+                                    AND t.object_id = OBJECT_ID(CONCAT('dbo.', '{table_name}'))
+                     INNER JOIN sys.partitions AS p
+                                ON i.object_id = p.object_id
+                                    AND i.index_id = p.index_id
+                     INNER JOIN sys.allocation_units AS a
+                                ON p.partition_id = a.container_id
+            GROUP BY t.name, p.rows
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        return {col.lower(): str(row[col]) for col in df.columns for row in df.collect()}

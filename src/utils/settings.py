@@ -116,5 +116,5 @@ class Settings(BaseSettings):
 
 
 # if __name__ == "__main__":
-#     settings = Settings(_env_file="test.env")
+#     settings = Settings(_env_file="../../tests/test.env")
 #     print(settings)
