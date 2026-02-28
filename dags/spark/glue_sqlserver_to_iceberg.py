@@ -32,8 +32,8 @@ def get_mapped_configs(config):
 
     result = []
     for table in tables:
-        schema, table_name = table.split(".")
-        inlet_urns = [f"urn:li:dataset:(urn:li:dataPlatform:mysql,{table},PROD)"]
+        schema, _, table_name = table.split(".")
+        inlet_urns = [f"urn:li:dataset:(urn:li:dataPlatform:sqlserver,{table},PROD)"]
         outlet_urns = [
             f"urn:li:dataset:(urn:li:dataPlatform:iceberg,{catalog}.{schema.lower()}_bronze.{table_name.lower()},PROD)"
         ]
@@ -58,7 +58,7 @@ def get_mapped_configs(config):
 #
 #     for table in config["job"]["tables"]:
 #         schema, table_name = table.split(".")
-#         inlets.append(Dataset(platform="mysql", name=f"{table}"))
+#         inlets.append(Dataset(platform="sqlserver", name=f"{table}"))
 #         outlets.append(Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}"))
 #
 #     print(inlets, outlets)
@@ -79,8 +79,8 @@ def generate_application_env():
         "VAULT__URL": "{{ var.value.VAULT_URL }}",
         "VAULT__USERNAME": "{{ var.value.VAULT_USERNAME }}",
         "VAULT__PASSWORD": "{{ var.value.VAULT_PASSWORD }}",
-        "VAULT__SECRET_PATH": "secret/data/user/database/local-mysql",
-        "DATABASE__TYPE": "mysql",
+        "VAULT__SECRET_PATH": "secret/data/user/database/local-sqlserver",
+        "DATABASE__TYPE": "sqlserver",
         "AWS__PROFILE": "{{ var.value.AWS_PROFILE }}",
         "AWS__CATALOG": "{{ var.value.AWS_CATALOG }}",
         "AWS__S3_BUCKET": "{{ var.value.AWS_S3_BUCKET }}",
@@ -97,7 +97,7 @@ def generate_application_env():
 with DAG(
     dag_id=DAG_ID,
     default_args=default_args,
-    description="migrate data from mysql to iceberg",
+    description="migrate data from sqlserver to iceberg",
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
@@ -142,7 +142,7 @@ with DAG(
     ingest_tables = CustomSparkSubmitOperator.partial(
         task_id=f"{DAG_ID}.spark-submit",
         conn_id="spark_default",
-        application="/opt/airflow/src/mysql_to_iceberg.py",
+        application="/opt/airflow/src/sqlserver_to_iceberg.py",
         py_files="/opt/airflow/src/utils.zip",
         map_index_template="{{task.name}}",
         env_vars=env_vars,

@@ -1,0 +1,7 @@
+job:
+  num_partition: 1
+  database: store
+  tables:
+    - store.dbo.tb_lower
+    - store.dbo.TB_UPPER
+    - store.dbo.TB_COMPOSITE_KEY
