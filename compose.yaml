@@ -80,6 +80,7 @@ x-airflow-common: &airflow-common
     #############################################
     # 2026-01-10 확인. Spark-Submit 관련 ENV 수정 금지
     #############################################
+    ARCH: ${ARCH}
     S3_BUCKET: ${S3_BUCKET}
     AWS_ENDPOINT_URL_S3: ${AWS_ENDPOINT_URL_S3}
     AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}

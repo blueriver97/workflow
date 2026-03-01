@@ -14,3 +14,4 @@ sed -i "s#\$YARN_RM_SCHEDULER_ADDRESS_RM02#$YARN_RM_SCHEDULER_ADDRESS_RM02#g" /o
 
 echo "INFO: Replace env in spark-defaults.conf ..."
 sed -i "s#\$S3_BUCKET#$S3_BUCKET#g" /opt/spark/conf/spark-defaults.conf
+sed -i "s#\$ARCH#$ARCH#g" /opt/spark/conf/spark-defaults.conf
