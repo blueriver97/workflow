@@ -1,0 +1,5 @@
+job:
+  topics:
+    - local.store.tb_lower
+    - local.store.TB_UPPER
+    - local.store.TB_COMPOSITE_KEY

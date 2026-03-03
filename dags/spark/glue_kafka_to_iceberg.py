@@ -4,13 +4,11 @@ from pathlib import Path
 import yaml
 from airflow import DAG
 from airflow.models import Variable
-from airflow.sdk import task
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from alerts.slack_notifier import SlackNotifier
-from operators.custom_spark import CustomSparkSubmitOperator
 
 DAG_ID = Path(__file__).name.removesuffix(".py")
 
-# Initialize Notifier
 slack_notifier = SlackNotifier(
     channel="#data-alerts", conn_id="slack_api", redis_host="redis", redis_port=6379, redis_db=0
 )
@@ -23,49 +21,24 @@ default_args = {
 }
 
 
-@task(task_id=f"{DAG_ID}.get_mapped_configs")
-def get_mapped_configs(config):
-    """expand_kwargs에 직접 전달될 '리스트'만 반환 (ValueError 해결 핵심)"""
-    tables = config["job"]["tables"]
-    num_partition = str(config["job"]["num_partition"])
-    catalog = "glue_catalog"
-
-    result = []
-    for table in tables:
-        schema, table_name = table.split(".")
-        inlet_urns = [f"urn:li:dataset:(urn:li:dataPlatform:mysql,{table},PROD)"]
-        outlet_urns = [
-            f"urn:li:dataset:(urn:li:dataPlatform:iceberg,{catalog}.{schema.lower()}_bronze.{table_name.lower()},PROD)"
-        ]
-
-        result.append(
-            {
-                "application_args": ["--table", table, "--num_partition", num_partition],
-                "name": f"{table}",
-                "mapped_inlets": inlet_urns,  # 키 이름 변경
-                "mapped_outlets": outlet_urns,  # 키 이름 변경
-            }
-        )
-
-    print(result)
-    return result
-
-
-# def get_inlets_outlets(config):
-#     """Airflow UI 가시성을 위한 inlets/outlets 생성"""
-#     inlets = []
-#     outlets = []
-#
-#     for table in config["job"]["tables"]:
-#         schema, table_name = table.split(".")
-#         inlets.append(Dataset(platform="mysql", name=f"{table}"))
-#         outlets.append(Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}"))
-#
-#     print(inlets, outlets)
-#     return {"inlets": inlets, "outlets": outlets}
+def get_lineage_urns(topics, catalog):
+    """Generate DataHub Lineage Inlets and Outlets"""
+    inlet_urns = []
+    outlet_urns = []
+    for topic in topics:
+        parts = topic.split(".")
+        if len(parts) >= 3:
+            schema, table_name = parts[-2], parts[-1]
+            inlet_urns.append(f"urn:li:dataset:(urn:li:dataPlatform:kafka,{topic},PROD)")
+            outlet_urns.append(
+                f"urn:li:dataset:(urn:li:dataPlatform:iceberg,{catalog}.{schema.lower()}_bronze.{table_name.lower()},PROD)"
+            )
+    return inlet_urns, outlet_urns
 
 
 def generate_env() -> dict:
+    """Generate common and application-specific environment variables"""
+
     env = {
         "SPARK_HOME": "{{ var.value.SPARK_HOME }}",
         "HADOOP_CONF_DIR": "{{ var.value.HADOOP_CONF_DIR }}",
@@ -98,11 +71,10 @@ def generate_env() -> dict:
 with DAG(
     dag_id=DAG_ID,
     default_args=default_args,
-    description="migrate data from mysql to iceberg",
+    description="migrate data from kafka to iceberg using a single spark job",
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    # DAG 레벨에 콜백 등록 (DAG 전체 실패 시 1회 호출)
     on_failure_callback=slack_notifier.send_failure,
     on_success_callback=slack_notifier.send_recovery,
 ) as dag:
@@ -110,9 +82,12 @@ with DAG(
     with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    mapped_configs_list = get_mapped_configs(config)
+    topics = config["job"]["topics"]
+    catalog = Variable.get("AWS_CATALOG", "glue_catalog")
 
+    inlets, outlets = get_lineage_urns(topics, catalog)
     env_vars = generate_env()
+
     aws_profile = Variable.get("AWS_PROFILE")
     datahub_gms_url = Variable.get("DATAHUB_GMS_URL")
     datahub_token = Variable.get("DATAHUB_TOKEN")
@@ -121,14 +96,12 @@ with DAG(
         "spark.yarn.maxAppAttempts": "1",
         "spark.driver.cores": "1",
         "spark.driver.memory": "1G",
-        "spark.executor.cores": "1",
-        "spark.executor.memory": "1G",
-        "spark.executor.instances": "1",
+        "spark.executor.cores": "2",  # Increased for potential multi-threading
+        "spark.executor.memory": "2G",
+        "spark.executor.instances": "2",
         "spark.yarn.appMasterEnv.AWS_PROFILE": aws_profile,
         "spark.executorEnv.AWS_PROFILE": aws_profile,
-        # OpenLineage Spark Listener 설정
         "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
-        # OpenLineage Transport 설정
         "spark.openlineage.transport.type": "http",
         "spark.openlineage.transport.url": datahub_gms_url,
         "spark.openlineage.transport.endpoint": "/openapi/openlineage/api/v1/lineage",
@@ -138,17 +111,17 @@ with DAG(
         "spark.openlineage.namespace": "prod",
     }
 
-    ingest_tables = CustomSparkSubmitOperator.partial(
-        task_id=f"{DAG_ID}.spark-submit",
+    ingest_task = SparkSubmitOperator(
+        task_id="submit_kafka_to_iceberg_job",
         conn_id="spark_default",
-        application="/opt/airflow/src/mysql_to_iceberg.py",
+        application="/opt/airflow/src/kafka_to_iceberg.py",
         py_files="/opt/airflow/src/utils.zip",
-        map_index_template="{{task.name}}",
+        application_args=["--topics", str(",".join(topics))],
         env_vars=env_vars,
         conf=spark_conf,
-        openlineage_inject_parent_job_info=True,
-        openlineage_inject_transport_info=True,
-    ).expand_kwargs(mapped_configs_list)
+        inlets=inlets,
+        outlets=outlets,
+    )
 
-# if __name__ == "__main__":
-#     dag.test()
+if __name__ == "__main__":
+    dag.test()
