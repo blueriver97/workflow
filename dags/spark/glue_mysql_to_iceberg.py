@@ -6,6 +6,7 @@ from airflow import DAG
 from airflow.models import Variable
 from airflow.sdk import task
 from alerts.slack_notifier import SlackNotifier
+from datahub_airflow_plugin.entities import Dataset
 from operators.custom_spark import CustomSparkSubmitOperator
 
 DAG_ID = Path(__file__).name.removesuffix(".py")
@@ -28,14 +29,18 @@ def get_mapped_configs(config):
     """expand_kwargs에 직접 전달될 '리스트'만 반환 (ValueError 해결 핵심)"""
     tables = config["job"]["tables"]
     num_partition = str(config["job"]["num_partition"])
-    catalog = "glue_catalog"
+    catalog = "catalog"
 
     result = []
     for table in tables:
         schema, table_name = table.split(".")
-        inlet_urns = [f"urn:li:dataset:(urn:li:dataPlatform:mysql,{table},PROD)"]
+        # inlet_urns = [f"urn:li:dataset:(urn:li:dataPlatform:mysql,{table},PROD)"]
+        # outlet_urns = [
+        #     f"urn:li:dataset:(urn:li:dataPlatform:iceberg,{catalog}.{schema.lower()}_bronze.{table_name.lower()},PROD)"
+        # ]
+        inlet_urns = [Dataset(platform="mysql", name=f"{table}", env="PROD", platform_instance="data_pipeline")]
         outlet_urns = [
-            f"urn:li:dataset:(urn:li:dataPlatform:iceberg,{catalog}.{schema.lower()}_bronze.{table_name.lower()},PROD)"
+            Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}", env="PROD")
         ]
 
         result.append(
@@ -46,8 +51,6 @@ def get_mapped_configs(config):
                 "mapped_outlets": outlet_urns,  # 키 이름 변경
             }
         )
-
-    print(result)
     return result
 
 
