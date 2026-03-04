@@ -214,14 +214,14 @@ def process_batch(
 
         # Upsert (Merge Into)
         if not upsert_df.isEmpty():
-            upsert_df.createOrReplaceTempView(f"upsert_view_{table}")
+            upsert_df.createOrReplaceGlobalTempView(f"upsert_view_{table}")
             columns = upsert_df.columns
             update_expr = ", ".join([f"t.{c} = s.{c}" for c in columns])
             insert_cols = ", ".join(columns)
             insert_vals = ", ".join([f"s.{c}" for c in columns])
             merge_query = dedent(f"""
                 MERGE INTO {full_table_name} t
-                USING (SELECT * FROM upsert_view_{table}) s
+                USING (SELECT * FROM global_temp.upsert_view_{table}) s
                 ON t.id_iceberg = s.id_iceberg
                 WHEN MATCHED THEN UPDATE SET {update_expr}
                 WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})
@@ -231,10 +231,10 @@ def process_batch(
 
         # Delete
         if not delete_df.isEmpty():
-            delete_df.createOrReplaceTempView(f"delete_view_{table}")
+            delete_df.createOrReplaceGlobalTempView(f"delete_view_{table}")
             delete_query = dedent(f"""
                 DELETE FROM {full_table_name} t
-                WHERE EXISTS (SELECT s.id_iceberg FROM delete_view_{table} s WHERE s.id_iceberg = t.id_iceberg)
+                WHERE EXISTS (SELECT s.id_iceberg FROM global_temp.delete_view_{table} s WHERE s.id_iceberg = t.id_iceberg)
             """)
             logger.info(f"Executing Delete for {full_table_name}")
             spark.sql(delete_query)

@@ -4,4 +4,4 @@ transport:
   endpoint: /openapi/openlineage/api/v1/lineage
   auth:
     type: api_key
-    apiKey: xxx
+    apiKey:
