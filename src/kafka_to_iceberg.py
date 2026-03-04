@@ -1,12 +1,12 @@
 import json
-import threading
+import sys
 from argparse import ArgumentParser
 from textwrap import dedent
 
 import pyspark.sql.functions as F
 import pyspark.sql.types as T
 from confluent_kafka.schema_registry import SchemaRegistryClient
-from pyspark import StorageLevel
+from pyspark import InheritableThread, StorageLevel
 from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql.avro.functions import from_avro
 
@@ -235,7 +235,7 @@ def process_batch(
             delete_query = dedent(f"""
                 DELETE FROM {full_table_name} t
                 WHERE EXISTS (SELECT s.id_iceberg FROM global_temp.delete_view_{table} s WHERE s.id_iceberg = t.id_iceberg)
-            """)
+             """)
             logger.info(f"Executing Delete for {full_table_name}")
             spark.sql(delete_query)
 
@@ -272,6 +272,7 @@ def run_topic_stream(spark: SparkSession, settings: Settings, topic: str):
             lambda batch_df, batch_id: process_batch(batch_df, batch_id, spark, settings, schema_registry_client, topic)
         )
         .option("checkpointLocation", checkpoint_path)
+        .queryName(topic)
         .outputMode("append")
         .trigger(availableNow=True)
         .start()
@@ -303,6 +304,8 @@ if __name__ == "__main__":
         .config("spark.sql.caseSensitive", "true")
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.shuffle.service.removeShuffle", "true")
+        .config("spark.python.use.pinned.thread", "true")
+        .config("spark.scheduler.mode", "FAIR")
         # .config("spark.metrics.namespace", settings.kafka.metric_namespace)
         .getOrCreate()
     )
@@ -314,13 +317,32 @@ if __name__ == "__main__":
     # UDF 등록: Byte Array -> Integer (Schema ID 추출용)
     spark.udf.register("byte_to_int", lambda x: int.from_bytes(x, byteorder="big", signed=False))
 
+    exceptions = []
+
+    def wrapper(t_spark, t_settings, t_topic):
+        try:
+            # 리니지 분리를 위한 ID 설정
+            spark.sparkContext.setLocalProperty("spark.scheduler.pool", topic)
+            spark.sparkContext.setLocalProperty("datahub.task.id", topic)
+            spark.sparkContext.setJobGroup(topic, f"Processing {topic}")
+            run_topic_stream(t_spark, t_settings, t_topic)
+        except Exception as e:
+            SparkLoggerManager().get_logger().error(f"Failed to process topic: {t_topic}")
+            exceptions.append(e)
+
     threads = []
     for topic in topics:
-        t = threading.Thread(target=run_topic_stream, args=(spark, settings, topic))
+        # InheritableThread 사용 (PySpark 3.1+ 지원)
+        # 스레드 로컬 속성(SparkContext.localProperties)을 자식 스레드로 상속
+        t = InheritableThread(target=wrapper, args=(spark, settings, topic))
         t.start()
         threads.append(t)
 
     for t in threads:
         t.join()
+
+    if exceptions:
+        SparkLoggerManager().get_logger().error("Job failed due to exceptions in worker threads.")
+        sys.exit(1)
 
     spark.stop()

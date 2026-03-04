@@ -6,6 +6,7 @@ from airflow import DAG
 from airflow.models import Variable
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from alerts.slack_notifier import SlackNotifier
+from datahub_airflow_plugin.entities import Dataset
 
 DAG_ID = Path(__file__).name.removesuffix(".py")
 
@@ -16,7 +17,7 @@ slack_notifier = SlackNotifier(
 default_args = {
     "owner": "data_engineer",
     "depends_on_past": False,
-    "retries": 1,
+    "retries": 0,
     "retry_delay": timedelta(minutes=5),
 }
 
@@ -29,10 +30,8 @@ def get_lineage_urns(topics, catalog):
         parts = topic.split(".")
         if len(parts) >= 3:
             schema, table_name = parts[-2], parts[-1]
-            inlet_urns.append(f"urn:li:dataset:(urn:li:dataPlatform:kafka,{topic},PROD)")
-            outlet_urns.append(
-                f"urn:li:dataset:(urn:li:dataPlatform:iceberg,{catalog}.{schema.lower()}_bronze.{table_name.lower()},PROD)"
-            )
+            inlet_urns.append(Dataset("kafka", topic, "PROD"))
+            outlet_urns.append(Dataset("iceberg", f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}", "PROD"))
     return inlet_urns, outlet_urns
 
 
@@ -101,6 +100,10 @@ with DAG(
         "spark.executor.instances": "2",
         "spark.yarn.appMasterEnv.AWS_PROFILE": aws_profile,
         "spark.executorEnv.AWS_PROFILE": aws_profile,
+        # "spark.jars.packages": "io.acryl:acryl-spark-lineage_2.13:0.2.18",
+        # "spark.extraListeners": "datahub.spark.DatahubSparkListener",
+        # "spark.datahub.rest.server": datahub_gms_url,
+        # "spark.datahub.rest.token": datahub_token,
         "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
         "spark.openlineage.transport.type": "http",
         "spark.openlineage.transport.url": datahub_gms_url,
@@ -112,6 +115,7 @@ with DAG(
     }
 
     ingest_task = SparkSubmitOperator(
+        name=DAG_ID,
         task_id="submit_kafka_to_iceberg_job",
         conn_id="spark_default",
         application="/opt/airflow/src/kafka_to_iceberg.py",
