@@ -5,3 +5,8 @@ transport:
   auth:
     type: api_key
     apiKey:
+
+#transport:
+#  type: http
+#  url: http://marquez.svc.internal:8080
+#  endpoint: /api/v1/lineage

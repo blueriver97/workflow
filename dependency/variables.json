@@ -1,0 +1,22 @@
+{
+  "AWS_CATALOG": "catalog",
+  "AWS_ICEBERG_PATH": "/iceberg",
+  "AWS_PROFILE": "dev",
+  "AWS_S3_BUCKET": "blueriver-datalake",
+  "DATAHUB_GMS_URL": "http://datahub.svc.internal:8080",
+  "DATAHUB_OPENLINEAGE_ENDPOINT": "/openapi/openlineage/api/v1/lineage",
+  "DATAHUB_TOKEN": {
+    "description": "DATAHUB PAT",
+    "value": ""
+  },
+  "HADOOP_CONF_DIR": "/opt/hadoop/etc/hadoop",
+  "KAFKA_BOOTSTRAP_SERVERS": "kafka.svc.internal:9092",
+  "KAFKA_SCHEMA_REGISTRY": "http://schema-registry.svc.internal:8081",
+  "PYSPARK_PYTHON": "./environment/bin/python",
+  "SPARK_DIST_CLASSPATH": "/opt/hadoop/etc/hadoop:/opt/hadoop/share/hadoop/common/lib/*:/opt/hadoop/share/hadoop/common/*:/opt/hadoop/share/hadoop/tools/lib/bundle-2.29.52.jar:/opt/hadoop/share/hadoop/tools/lib/analyticsaccelerator-s3-1.2.1.jar:/opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.4.2.jar:/opt/hadoop/share/hadoop/hdfs:/opt/hadoop/share/hadoop/hdfs/lib/*:/opt/hadoop/share/hadoop/hdfs/*:/opt/hadoop/share/hadoop/tools/lib/kafka-clients-3.9.0.jar:/opt/hadoop/share/hadoop/tools/lib/hadoop-kafka-3.4.2.jar:/opt/hadoop/share/hadoop/mapreduce/*:/opt/hadoop/share/hadoop/yarn:/opt/hadoop/share/hadoop/yarn/lib/*:/opt/hadoop/share/hadoop/yarn/*",
+  "SPARK_EXTRA_LISTENER": "io.openlineage.spark.agent.OpenLineageSparkListener",
+  "SPARK_HOME": "/opt/spark",
+  "VAULT_PASSWORD": "vaultadmin",
+  "VAULT_URL": "http://vault.svc.internal:8200",
+  "VAULT_USERNAME": "admin"
+}
