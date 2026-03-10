@@ -82,7 +82,7 @@ with DAG(
         config = yaml.safe_load(f)
 
     topics = config["job"]["topics"]
-    catalog = Variable.get("AWS_CATALOG", "glue_catalog")
+    catalog = Variable.get("AWS_CATALOG", "catalog")
 
     inlets, outlets = get_lineage_urns(topics, catalog)
     env_vars = generate_env()

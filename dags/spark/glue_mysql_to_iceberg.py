@@ -34,7 +34,7 @@ def get_mapped_configs(config):
     result = []
     for table in tables:
         schema, table_name = table.split(".")
-        inlet_urns = [Dataset(platform="mysql", name=f"{table}", env="PROD", platform_instance="data_pipeline")]
+        inlet_urns = [Dataset(platform="mysql", name=f"{table}", env="PROD")]
         outlet_urns = [
             Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}", env="PROD")
         ]
