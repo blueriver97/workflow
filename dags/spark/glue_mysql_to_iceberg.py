@@ -34,10 +34,6 @@ def get_mapped_configs(config):
     result = []
     for table in tables:
         schema, table_name = table.split(".")
-        # inlet_urns = [f"urn:li:dataset:(urn:li:dataPlatform:mysql,{table},PROD)"]
-        # outlet_urns = [
-        #     f"urn:li:dataset:(urn:li:dataPlatform:iceberg,{catalog}.{schema.lower()}_bronze.{table_name.lower()},PROD)"
-        # ]
         inlet_urns = [Dataset(platform="mysql", name=f"{table}", env="PROD", platform_instance="data_pipeline")]
         outlet_urns = [
             Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}", env="PROD")
@@ -52,20 +48,6 @@ def get_mapped_configs(config):
             }
         )
     return result
-
-
-# def get_inlets_outlets(config):
-#     """Airflow UI 가시성을 위한 inlets/outlets 생성"""
-#     inlets = []
-#     outlets = []
-#
-#     for table in config["job"]["tables"]:
-#         schema, table_name = table.split(".")
-#         inlets.append(Dataset(platform="mysql", name=f"{table}"))
-#         outlets.append(Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}"))
-#
-#     print(inlets, outlets)
-#     return {"inlets": inlets, "outlets": outlets}
 
 
 def generate_env() -> dict:
@@ -118,7 +100,9 @@ with DAG(
     env_vars = generate_env()
     aws_profile = Variable.get("AWS_PROFILE")
     datahub_gms_url = Variable.get("DATAHUB_GMS_URL")
+    datahub_openlineage_endpoint = Variable.get("DATAHUB_OPENLINEAGE_ENDPOINT")
     datahub_token = Variable.get("DATAHUB_TOKEN")
+    spark_extra_listener = Variable.get("SPARK_EXTRA_LISTENER")
 
     spark_conf = {
         "spark.yarn.maxAppAttempts": "1",
@@ -130,11 +114,11 @@ with DAG(
         "spark.yarn.appMasterEnv.AWS_PROFILE": aws_profile,
         "spark.executorEnv.AWS_PROFILE": aws_profile,
         # OpenLineage Spark Listener 설정
-        "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+        "spark.extraListeners": spark_extra_listener,
         # OpenLineage Transport 설정
         "spark.openlineage.transport.type": "http",
         "spark.openlineage.transport.url": datahub_gms_url,
-        "spark.openlineage.transport.endpoint": "/openapi/openlineage/api/v1/lineage",
+        "spark.openlineage.transport.endpoint": datahub_openlineage_endpoint,
         "spark.openlineage.transport.auth.type": "api_key",
         "spark.openlineage.transport.auth.apiKey": datahub_token,
         "spark.openlineage.appName": f"spark.prod.{DAG_ID}",

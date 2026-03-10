@@ -121,10 +121,6 @@ x-airflow-common: &airflow-common
   user: ${AIRFLOW_UID:-50000}:0
   extra_hosts:
     - "host.docker.internal:host-gateway"
-    - "vault.svc.internal:host-gateway"
-    - "kafka.svc.internal:host-gateway"
-    - "schema-registry.svc.internal:host-gateway"
-    - "datahub.svc.internal:host-gateway"
   depends_on: &airflow-common-depends-on
     redis:
       condition: service_healthy

@@ -17,7 +17,7 @@ slack_notifier = SlackNotifier(
 default_args = {
     "owner": "data_engineer",
     "depends_on_past": False,
-    "retries": 0,
+    "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
 
@@ -89,7 +89,9 @@ with DAG(
 
     aws_profile = Variable.get("AWS_PROFILE")
     datahub_gms_url = Variable.get("DATAHUB_GMS_URL")
+    datahub_openlineage_endpoint = Variable.get("DATAHUB_OPENLINEAGE_ENDPOINT")
     datahub_token = Variable.get("DATAHUB_TOKEN")
+    spark_extra_listener = Variable.get("SPARK_EXTRA_LISTENER")
 
     spark_conf = {
         "spark.yarn.maxAppAttempts": "1",
@@ -100,14 +102,10 @@ with DAG(
         "spark.executor.instances": "2",
         "spark.yarn.appMasterEnv.AWS_PROFILE": aws_profile,
         "spark.executorEnv.AWS_PROFILE": aws_profile,
-        # "spark.jars.packages": "io.acryl:acryl-spark-lineage_2.13:0.2.18",
-        # "spark.extraListeners": "datahub.spark.DatahubSparkListener",
-        # "spark.datahub.rest.server": datahub_gms_url,
-        # "spark.datahub.rest.token": datahub_token,
-        "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+        "spark.extraListeners": spark_extra_listener,
         "spark.openlineage.transport.type": "http",
         "spark.openlineage.transport.url": datahub_gms_url,
-        "spark.openlineage.transport.endpoint": "/openapi/openlineage/api/v1/lineage",
+        "spark.openlineage.transport.endpoint": datahub_openlineage_endpoint,
         "spark.openlineage.transport.auth.type": "api_key",
         "spark.openlineage.transport.auth.apiKey": datahub_token,
         "spark.openlineage.appName": f"spark.prod.{DAG_ID}",
