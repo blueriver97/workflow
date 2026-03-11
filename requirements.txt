@@ -2,6 +2,7 @@
 astronomer-cosmos
 dbt-core
 dbt-athena
+openlineage-dbt
 boto3
 pydantic-core
 pydantic_settings

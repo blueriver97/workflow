@@ -118,6 +118,7 @@ x-airflow-common: &airflow-common
     - ${AIRFLOW_PROJ_DIR:-.}/src:/opt/airflow/src
     - ${AIRFLOW_PROJ_DIR:-.}/config/airflow:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/config/setup.sh:/home/airflow/setup.sh
+    - ${DBT_PROJ_DIR:-../dbt-openlineage}:/opt/airflow/dbt/store_mart
   user: ${AIRFLOW_UID:-50000}:0
   extra_hosts:
     - "host.docker.internal:host-gateway"
