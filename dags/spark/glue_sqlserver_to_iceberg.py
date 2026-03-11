@@ -6,6 +6,7 @@ from airflow import DAG
 from airflow.models import Variable
 from airflow.sdk import task
 from alerts.slack_notifier import SlackNotifier
+from datahub_airflow_plugin.entities import Dataset
 from operators.custom_spark import CustomSparkSubmitOperator
 
 DAG_ID = Path(__file__).name.removesuffix(".py")
@@ -26,56 +27,37 @@ default_args = {
 @task(task_id=f"{DAG_ID}.get_mapped_configs")
 def get_mapped_configs(config):
     """expand_kwargs에 직접 전달될 '리스트'만 반환 (ValueError 해결 핵심)"""
+    catalog = Variable.get("AWS_CATALOG")
     tables = config["job"]["tables"]
     num_partition = str(config["job"]["num_partition"])
-    catalog = "glue_catalog"
 
     result = []
     for table in tables:
         schema, _, table_name = table.split(".")
-        inlet_urns = [f"urn:li:dataset:(urn:li:dataPlatform:sqlserver,{table},PROD)"]
+        inlet_urns = [Dataset(platform="sqlserver", name=f"{table}", env="PROD")]
         outlet_urns = [
-            f"urn:li:dataset:(urn:li:dataPlatform:iceberg,{catalog}.{schema.lower()}_bronze.{table_name.lower()},PROD)"
+            Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}", env="PROD")
         ]
-
         result.append(
             {
                 "application_args": ["--table", table, "--num_partition", num_partition],
                 "name": f"{table}",
-                "mapped_inlets": inlet_urns,  # 키 이름 변경
-                "mapped_outlets": outlet_urns,  # 키 이름 변경
+                "mapped_inlets": inlet_urns,
+                "mapped_outlets": outlet_urns,
             }
         )
-
-    print(result)
     return result
 
 
-# def get_inlets_outlets(config):
-#     """Airflow UI 가시성을 위한 inlets/outlets 생성"""
-#     inlets = []
-#     outlets = []
-#
-#     for table in config["job"]["tables"]:
-#         schema, table_name = table.split(".")
-#         inlets.append(Dataset(platform="sqlserver", name=f"{table}"))
-#         outlets.append(Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}"))
-#
-#     print(inlets, outlets)
-#     return {"inlets": inlets, "outlets": outlets}
-
-
-def generate_env():
-    return {
+def generate_env() -> dict:
+    env = {
         "SPARK_HOME": "{{ var.value.SPARK_HOME }}",
         "HADOOP_CONF_DIR": "{{ var.value.HADOOP_CONF_DIR }}",
         "PYSPARK_PYTHON": "{{ var.value.PYSPARK_PYTHON }}",
         # "SPARK_DIST_CLASSPATH": "{{ var.value.SPARK_DIST_CLASSPATH }}",
     }
 
-
-def generate_application_env():
-    return {
+    application_env = {
         "VAULT__URL": "{{ var.value.VAULT_URL }}",
         "VAULT__USERNAME": "{{ var.value.VAULT_USERNAME }}",
         "VAULT__PASSWORD": "{{ var.value.VAULT_PASSWORD }}",
@@ -92,6 +74,9 @@ def generate_application_env():
         "KAFKA__MAX_OFFSETS_PER_TRIGGER": "1000000",
         "KAFKA__STARTING_OFFSETS": "earliest",
     }
+    env.update(application_env)
+
+    return env
 
 
 with DAG(
@@ -112,11 +97,11 @@ with DAG(
     mapped_configs_list = get_mapped_configs(config)
 
     env_vars = generate_env()
-    env_vars.update(generate_application_env())
-
     aws_profile = Variable.get("AWS_PROFILE")
-    datahub_gms_url = Variable.get("DATAHUB_GMS_URL")
-    datahub_token = Variable.get("DATAHUB_TOKEN")
+    openlineage_url = Variable.get("OPENLINEAGE_URL")
+    openlineage_endpoint = Variable.get("OPENLINEAGE_ENDPOINT")
+    openlineage_api_key = Variable.get("OPENLINEAGE_API_KEY", "")
+    openlineage_spark_extra_listener = Variable.get("OPENLINEAGE_SPARK_EXTRA_LISTENER")
 
     spark_conf = {
         "spark.yarn.maxAppAttempts": "1",
@@ -128,13 +113,13 @@ with DAG(
         "spark.yarn.appMasterEnv.AWS_PROFILE": aws_profile,
         "spark.executorEnv.AWS_PROFILE": aws_profile,
         # OpenLineage Spark Listener 설정
-        "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+        "spark.extraListeners": openlineage_spark_extra_listener,
         # OpenLineage Transport 설정
         "spark.openlineage.transport.type": "http",
-        "spark.openlineage.transport.url": datahub_gms_url,
-        "spark.openlineage.transport.endpoint": "/openapi/openlineage/api/v1/lineage",
+        "spark.openlineage.transport.url": openlineage_url,
+        "spark.openlineage.transport.endpoint": openlineage_endpoint,
         "spark.openlineage.transport.auth.type": "api_key",
-        "spark.openlineage.transport.auth.apiKey": datahub_token,
+        "spark.openlineage.transport.auth.apiKey": openlineage_api_key,
         "spark.openlineage.appName": f"spark.prod.{DAG_ID}",
         "spark.openlineage.namespace": "prod",
     }

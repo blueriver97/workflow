@@ -6,7 +6,6 @@ from airflow import DAG
 from airflow.models import Variable
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from alerts.slack_notifier import SlackNotifier
-from datahub_airflow_plugin.entities import Dataset
 
 DAG_ID = Path(__file__).name.removesuffix(".py")
 
@@ -20,19 +19,6 @@ default_args = {
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
-
-
-def get_lineage_urns(topics, catalog):
-    """Generate DataHub Lineage Inlets and Outlets"""
-    inlet_urns = []
-    outlet_urns = []
-    for topic in topics:
-        parts = topic.split(".")
-        if len(parts) >= 3:
-            schema, table_name = parts[-2], parts[-1]
-            inlet_urns.append(Dataset("kafka", topic, "PROD"))
-            outlet_urns.append(Dataset("iceberg", f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}", "PROD"))
-    return inlet_urns, outlet_urns
 
 
 def generate_env() -> dict:
@@ -84,14 +70,13 @@ with DAG(
     topics = config["job"]["topics"]
     catalog = Variable.get("AWS_CATALOG", "catalog")
 
-    inlets, outlets = get_lineage_urns(topics, catalog)
     env_vars = generate_env()
 
     aws_profile = Variable.get("AWS_PROFILE")
-    datahub_gms_url = Variable.get("DATAHUB_GMS_URL")
-    datahub_openlineage_endpoint = Variable.get("DATAHUB_OPENLINEAGE_ENDPOINT")
-    datahub_token = Variable.get("DATAHUB_TOKEN")
-    spark_extra_listener = Variable.get("SPARK_EXTRA_LISTENER")
+    openlineage_url = Variable.get("OPENLINEAGE_URL")
+    openlineage_endpoint = Variable.get("OPENLINEAGE_ENDPOINT")
+    openlineage_api_key = Variable.get("OPENLINEAGE_API_KEY")
+    openlineage_spark_extra_listener = Variable.get("OPENLINEAGE_SPARK_EXTRA_LISTENER")
 
     spark_conf = {
         "spark.yarn.maxAppAttempts": "1",
@@ -102,12 +87,12 @@ with DAG(
         "spark.executor.instances": "2",
         "spark.yarn.appMasterEnv.AWS_PROFILE": aws_profile,
         "spark.executorEnv.AWS_PROFILE": aws_profile,
-        "spark.extraListeners": spark_extra_listener,
+        "spark.extraListeners": openlineage_spark_extra_listener,
         "spark.openlineage.transport.type": "http",
-        "spark.openlineage.transport.url": datahub_gms_url,
-        "spark.openlineage.transport.endpoint": datahub_openlineage_endpoint,
+        "spark.openlineage.transport.url": openlineage_url,
+        "spark.openlineage.transport.endpoint": openlineage_endpoint,
         "spark.openlineage.transport.auth.type": "api_key",
-        "spark.openlineage.transport.auth.apiKey": datahub_token,
+        "spark.openlineage.transport.auth.apiKey": openlineage_api_key,
         "spark.openlineage.appName": f"spark.prod.{DAG_ID}",
         "spark.openlineage.namespace": "prod",
     }
@@ -121,8 +106,6 @@ with DAG(
         application_args=["--topics", str(",".join(topics))],
         env_vars=env_vars,
         conf=spark_conf,
-        inlets=inlets,
-        outlets=outlets,
     )
 
 if __name__ == "__main__":

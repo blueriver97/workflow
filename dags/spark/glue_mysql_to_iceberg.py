@@ -27,9 +27,9 @@ default_args = {
 @task(task_id=f"{DAG_ID}.get_mapped_configs")
 def get_mapped_configs(config):
     """expand_kwargs에 직접 전달될 '리스트'만 반환 (ValueError 해결 핵심)"""
+    catalog = Variable.get("AWS_CATALOG")
     tables = config["job"]["tables"]
     num_partition = str(config["job"]["num_partition"])
-    catalog = "catalog"
 
     result = []
     for table in tables:
@@ -38,13 +38,12 @@ def get_mapped_configs(config):
         outlet_urns = [
             Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}", env="PROD")
         ]
-
         result.append(
             {
                 "application_args": ["--table", table, "--num_partition", num_partition],
                 "name": f"{table}",
-                "mapped_inlets": inlet_urns,  # 키 이름 변경
-                "mapped_outlets": outlet_urns,  # 키 이름 변경
+                "mapped_inlets": inlet_urns,
+                "mapped_outlets": outlet_urns,
             }
         )
     return result
@@ -99,10 +98,10 @@ with DAG(
 
     env_vars = generate_env()
     aws_profile = Variable.get("AWS_PROFILE")
-    datahub_gms_url = Variable.get("DATAHUB_GMS_URL")
-    datahub_openlineage_endpoint = Variable.get("DATAHUB_OPENLINEAGE_ENDPOINT")
-    datahub_token = Variable.get("DATAHUB_TOKEN")
-    spark_extra_listener = Variable.get("SPARK_EXTRA_LISTENER")
+    openlineage_url = Variable.get("OPENLINEAGE_URL")
+    openlineage_endpoint = Variable.get("OPENLINEAGE_ENDPOINT")
+    openlineage_api_key = Variable.get("OPENLINEAGE_API_KEY", "")
+    openlineage_spark_extra_listener = Variable.get("OPENLINEAGE_SPARK_EXTRA_LISTENER")
 
     spark_conf = {
         "spark.yarn.maxAppAttempts": "1",
@@ -114,13 +113,13 @@ with DAG(
         "spark.yarn.appMasterEnv.AWS_PROFILE": aws_profile,
         "spark.executorEnv.AWS_PROFILE": aws_profile,
         # OpenLineage Spark Listener 설정
-        "spark.extraListeners": spark_extra_listener,
+        "spark.extraListeners": openlineage_spark_extra_listener,
         # OpenLineage Transport 설정
         "spark.openlineage.transport.type": "http",
-        "spark.openlineage.transport.url": datahub_gms_url,
-        "spark.openlineage.transport.endpoint": datahub_openlineage_endpoint,
+        "spark.openlineage.transport.url": openlineage_url,
+        "spark.openlineage.transport.endpoint": openlineage_endpoint,
         "spark.openlineage.transport.auth.type": "api_key",
-        "spark.openlineage.transport.auth.apiKey": datahub_token,
+        "spark.openlineage.transport.auth.apiKey": openlineage_api_key,
         "spark.openlineage.appName": f"spark.prod.{DAG_ID}",
         "spark.openlineage.namespace": "prod",
     }
