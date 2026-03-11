@@ -6,6 +6,7 @@ from airflow import DAG
 from airflow.models import Variable
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from alerts.slack_notifier import SlackNotifier
+from datahub_airflow_plugin.entities import Dataset
 
 DAG_ID = Path(__file__).name.removesuffix(".py")
 
@@ -70,6 +71,15 @@ with DAG(
     topics = config["job"]["topics"]
     catalog = Variable.get("AWS_CATALOG", "catalog")
 
+    all_inlets = []
+    all_outlets = []
+    for topic in topics:
+        _, schema, table_name = topic.split(".")
+        all_inlets.append(Dataset(platform="kafka", name=topic, env="PROD"))
+        all_outlets.append(
+            Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}", env="PROD")
+        )
+
     env_vars = generate_env()
 
     aws_profile = Variable.get("AWS_PROFILE")
@@ -106,6 +116,8 @@ with DAG(
         application_args=["--topics", str(",".join(topics))],
         env_vars=env_vars,
         conf=spark_conf,
+        inlets=all_inlets,
+        outlets=all_outlets,
     )
 
 if __name__ == "__main__":

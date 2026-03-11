@@ -4,10 +4,10 @@ from pathlib import Path
 import yaml
 from airflow import DAG
 from airflow.models import Variable
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.sdk import task
 from alerts.slack_notifier import SlackNotifier
 from datahub_airflow_plugin.entities import Dataset
-from operators.custom_spark import CustomSparkSubmitOperator
 
 DAG_ID = Path(__file__).name.removesuffix(".py")
 
@@ -27,26 +27,34 @@ default_args = {
 @task(task_id=f"{DAG_ID}.get_mapped_configs")
 def get_mapped_configs(config):
     """expand_kwargs에 직접 전달될 '리스트'만 반환 (ValueError 해결 핵심)"""
-    catalog = Variable.get("AWS_CATALOG")
     tables = config["job"]["tables"]
     num_partition = str(config["job"]["num_partition"])
 
     result = []
     for table in tables:
-        schema, _, table_name = table.split(".")
-        inlet_urns = [Dataset(platform="sqlserver", name=f"{table}", env="PROD")]
-        outlet_urns = [
-            Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}", env="PROD")
-        ]
         result.append(
             {
                 "application_args": ["--table", table, "--num_partition", num_partition],
                 "name": f"{table}",
-                "mapped_inlets": inlet_urns,
-                "mapped_outlets": outlet_urns,
             }
         )
     return result
+
+
+def generate_lineage(config) -> tuple[list[Dataset], list[Dataset]]:
+    """전체 테이블에 대한 inlets/outlets를 집계하여 반환"""
+    catalog = Variable.get("AWS_CATALOG")
+    tables = config["job"]["tables"]
+
+    all_inlets = []
+    all_outlets = []
+    for table in tables:
+        schema, _, table_name = table.split(".")
+        all_inlets.append(Dataset(platform="sqlserver", name=f"{table}", env="PROD"))
+        all_outlets.append(
+            Dataset(platform="iceberg", name=f"{catalog}.{schema.lower()}_bronze.{table_name.lower()}", env="PROD")
+        )
+    return all_inlets, all_outlets
 
 
 def generate_env() -> dict:
@@ -95,6 +103,7 @@ with DAG(
         config = yaml.safe_load(f)
 
     mapped_configs_list = get_mapped_configs(config)
+    all_inlets, all_outlets = generate_lineage(config)
 
     env_vars = generate_env()
     aws_profile = Variable.get("AWS_PROFILE")
@@ -120,11 +129,12 @@ with DAG(
         "spark.openlineage.transport.endpoint": openlineage_endpoint,
         "spark.openlineage.transport.auth.type": "api_key",
         "spark.openlineage.transport.auth.apiKey": openlineage_api_key,
-        "spark.openlineage.appName": f"spark.prod.{DAG_ID}",
+        # airflow.cfg 내 [openlineage] namespace=prod 설정 필수
         "spark.openlineage.namespace": "prod",
+        "spark.openlineage.appName": f"spark.prod.{DAG_ID}",
     }
 
-    ingest_tables = CustomSparkSubmitOperator.partial(
+    ingest_tables = SparkSubmitOperator.partial(
         task_id=f"{DAG_ID}.spark-submit",
         conn_id="spark_default",
         application="/opt/airflow/src/sqlserver_to_iceberg.py",
@@ -132,6 +142,8 @@ with DAG(
         map_index_template="{{task.name}}",
         env_vars=env_vars,
         conf=spark_conf,
+        inlets=all_inlets,
+        outlets=all_outlets,
         openlineage_inject_parent_job_info=True,
         openlineage_inject_transport_info=True,
     ).expand_kwargs(mapped_configs_list)
