@@ -10,9 +10,9 @@
     "description": "DATAHUB PAT",
     "value": ""
   },
-  "OPENLINEAGE_ENDPOINT": "/api/v1/lineage",
+  "OPENLINEAGE_ENDPOINT": "/openapi/openlineage/api/v1/lineage",
   "OPENLINEAGE_SPARK_EXTRA_LISTENER": "io.openlineage.spark.agent.OpenLineageSparkListener",
-  "OPENLINEAGE_URL": "http://datahub.svc.internal:8080/openapi/openlineage",
+  "OPENLINEAGE_URL": "http://datahub.svc.internal:8080",
   "PYSPARK_PYTHON": "./environment/bin/python",
   "SPARK_DIST_CLASSPATH": "/opt/hadoop/etc/hadoop:/opt/hadoop/share/hadoop/common/lib/*:/opt/hadoop/share/hadoop/common/*:/opt/hadoop/share/hadoop/tools/lib/bundle-2.29.52.jar:/opt/hadoop/share/hadoop/tools/lib/analyticsaccelerator-s3-1.2.1.jar:/opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.4.2.jar:/opt/hadoop/share/hadoop/hdfs:/opt/hadoop/share/hadoop/hdfs/lib/*:/opt/hadoop/share/hadoop/hdfs/*:/opt/hadoop/share/hadoop/tools/lib/kafka-clients-3.9.0.jar:/opt/hadoop/share/hadoop/tools/lib/hadoop-kafka-3.4.2.jar:/opt/hadoop/share/hadoop/mapreduce/*:/opt/hadoop/share/hadoop/yarn:/opt/hadoop/share/hadoop/yarn/lib/*:/opt/hadoop/share/hadoop/yarn/*",
   "SPARK_HOME": "/opt/spark",

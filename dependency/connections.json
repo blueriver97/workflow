@@ -1,4 +1,14 @@
 {
+  "aws_default": {
+    "conn_type": "aws",
+    "description": "AWS Profile",
+    "login": null,
+    "password": null,
+    "host": null,
+    "port": null,
+    "schema": null,
+    "extra": "{\"profile_name\": \"dev\"}"
+  },
   "datahub_rest_default": {
     "conn_type": "datahub-rest",
     "description": "Datahub Rest Sink (Password: PAT)",
