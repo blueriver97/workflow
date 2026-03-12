@@ -1,20 +1,27 @@
 # Dependencies
+
+# dbt (dbt-athena pulls in dbt-core transitively)
 astronomer-cosmos
-dbt-core
 dbt-athena
 openlineage-dbt
-boto3
-pydantic-core
+confluent-kafka
+
+# pydantic (pydantic_settings pulls in pydantic, pydantic-core transitively)
 pydantic_settings
-pydantic
+
+# infra / data
 hvac
 redis
 pandas
 pyspark==4.0.1
+
+# airflow providers (amazon pulls in boto3 transitively)
 apache-airflow-providers-apache-spark==5.5.0
 apache-airflow-providers-jdbc
 apache-airflow-providers-slack
 apache-airflow-providers-openlineage
 apache-airflow-providers-amazon[s3fs]
+
+# datahub
 acryl-datahub-airflow-plugin>=1.1.0.4
 acryl-datahub-classify

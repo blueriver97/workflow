@@ -3,7 +3,7 @@ from pathlib import Path
 
 from airflow import DAG
 from alerts.slack_notifier import SlackNotifier
-from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig
+from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig
 from cosmos.constants import ExecutionMode, InvocationMode
 from cosmos.operators.local import (
     DbtDocsLocalOperator,
@@ -78,9 +78,6 @@ with DAG(
         ),
         profile_config=profile_config,
         execution_config=dbt_run_execution_config,
-        render_config=RenderConfig(
-            select=["path:models"],
-        ),
     )
 
     # 3. docs generate: 문서 및 카탈로그 생성 (target/catalog.json, target/index.html)

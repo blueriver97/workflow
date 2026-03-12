@@ -122,6 +122,8 @@ x-airflow-common: &airflow-common
     - ${HOME}/.aws:/home/airflow/.aws
     - ${DBT_PROJ_DIR:-../dbt-openlineage}:/opt/airflow/dbt/store_mart
   user: ${AIRFLOW_UID:-50000}:0
+  networks:
+    - default
   extra_hosts:
     - "host.docker.internal:host-gateway"
   depends_on: &airflow-common-depends-on
