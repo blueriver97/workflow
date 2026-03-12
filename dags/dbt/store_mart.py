@@ -1,16 +1,15 @@
-import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from airflow import DAG
 from alerts.slack_notifier import SlackNotifier
 from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig
-from cosmos.constants import ExecutionMode
+from cosmos.constants import ExecutionMode, InvocationMode
 from cosmos.operators.local import (
-    DbtCompileLocalOperator,
     DbtDocsLocalOperator,
     DbtSourceLocalOperator,
 )
+from operators.dbt_compile import DbtCompileLocalOperatorNoUpload
 
 DAG_ID = Path(__file__).name.removesuffix(".py")
 
@@ -19,9 +18,6 @@ DBT_ROOT_DIR = Path("/opt/airflow/dbt")
 DBT_PROJECT_DIR = DBT_ROOT_DIR / "store_mart"
 DBT_EXECUTABLE_PATH = "/home/airflow/.local/bin/dbt"
 DBT_OL_EXECUTABLE_PATH = "/home/airflow/.local/bin/dbt-ol"
-
-# dbt-ol이 설치되어 있으면 우선 사용, 없으면 dbt로 폴백
-DBT_RUN_EXECUTABLE_PATH = DBT_OL_EXECUTABLE_PATH if shutil.which("dbt-ol") else DBT_EXECUTABLE_PATH
 
 slack_notifier = SlackNotifier(
     channel="#data-alerts", conn_id="slack_api", redis_host="redis", redis_port=6379, redis_db=0
@@ -40,10 +36,15 @@ profile_config = ProfileConfig(
     profiles_yml_filepath=DBT_PROJECT_DIR / "profiles.yml",
 )
 
-# dbt-ol 우선, 미설치 시 dbt 폴백 (openlineage.yml의 Kafka transport 참조)
+# dbt-ol (SUBPROCESS) → openlineage.yml (Kafka transport) → datahub-toolkit에서 schemaField 보강
+# Airflow 3 task 프로세스는 DB 직접 접근을 차단 (sql_alchemy_conn=airflow-db-not-allowed:///)
+# dbt-ol의 Kafka transport가 airflow를 import할 때 DB 초기화 crash 방지용 더미 URL 필요
+OPENLINEAGE_CONFIG = str(DBT_PROJECT_DIR / "openlineage.yml")
+
 dbt_run_execution_config = ExecutionConfig(
     execution_mode=ExecutionMode.LOCAL,
-    dbt_executable_path=DBT_RUN_EXECUTABLE_PATH,
+    dbt_executable_path=DBT_OL_EXECUTABLE_PATH,
+    invocation_mode=InvocationMode.SUBPROCESS,
 )
 
 with DAG(
@@ -57,17 +58,24 @@ with DAG(
     on_success_callback=slack_notifier.send_recovery,
 ) as dag:
     # 1. compile: SQL 유효성 검증 (target/compiled 생성)
-    compile = DbtCompileLocalOperator(
+    compile = DbtCompileLocalOperatorNoUpload(
         task_id="dbt_compile",
         project_dir=DBT_PROJECT_DIR,
         profile_config=profile_config,
         dbt_executable_path=DBT_EXECUTABLE_PATH,
+        extra_context={"dbt_dag_task_group_identifier": DAG_ID},
     )
 
     # 2. dbt-ol run: 모델별 실행 + OpenLineage 이벤트 Kafka 게시
     dbt_run = DbtTaskGroup(
         group_id="store_mart",
-        project_config=ProjectConfig(dbt_project_path=DBT_PROJECT_DIR),
+        project_config=ProjectConfig(
+            dbt_project_path=DBT_PROJECT_DIR,
+            env_vars={
+                "OPENLINEAGE_CONFIG": OPENLINEAGE_CONFIG,
+                "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN": "sqlite:////tmp/airflow_dbt_dummy.db",
+            },
+        ),
         profile_config=profile_config,
         execution_config=dbt_run_execution_config,
         render_config=RenderConfig(

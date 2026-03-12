@@ -25,13 +25,13 @@ class Notifier(LoggingMixin):
         pass
 
     @abstractmethod
-    def _get_event_key(self) -> None:
+    def _get_event_key(self, dag_id: str, task_id: str, run_id: str) -> str:
         pass
 
     @abstractmethod
-    def _get_or_create_parent(self) -> None:
+    def _get_or_create_parent(self, dag_id: str, task_id: str, run_id: str) -> str:
         pass
 
     @abstractmethod
-    def _store_ts(self) -> None:
+    def _store_ts(self, dag_id: str, task_id: str, run_id: str, ts: str) -> None:
         pass
