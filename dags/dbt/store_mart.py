@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from airflow import DAG
-from alerts.slack_notifier import SlackNotifier
 from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig
 from cosmos.constants import ExecutionMode, InvocationMode
 from cosmos.operators.local import (
@@ -19,9 +18,20 @@ DBT_PROJECT_DIR = DBT_ROOT_DIR / "store_mart"
 DBT_EXECUTABLE_PATH = "/home/airflow/.local/bin/dbt"
 DBT_OL_EXECUTABLE_PATH = "/home/airflow/.local/bin/dbt-ol"
 
-slack_notifier = SlackNotifier(
-    channel="#data-alerts", conn_id="slack_api", redis_host="redis", redis_port=6379, redis_db=0
-)
+
+def _get_notifier():
+    from alerts.slack_notifier import SlackNotifier
+
+    return SlackNotifier(channel="#data-alerts", conn_id="slack_api", redis_host="redis", redis_port=6379, redis_db=0)
+
+
+def on_failure(context):
+    _get_notifier().send_failure(context)
+
+
+def on_success(context):
+    _get_notifier().send_recovery(context)
+
 
 default_args = {
     "owner": "data_engineer",
@@ -54,8 +64,8 @@ with DAG(
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    on_failure_callback=slack_notifier.send_failure,
-    on_success_callback=slack_notifier.send_recovery,
+    on_failure_callback=on_failure,
+    on_success_callback=on_success,
 ) as dag:
     # 1. compile: SQL 유효성 검증 (target/compiled 생성)
     compile = DbtCompileLocalOperatorNoUpload(

@@ -6,15 +6,9 @@ from airflow import DAG
 from airflow.models import Variable
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.sdk import task
-from alerts.slack_notifier import SlackNotifier
 from datahub_airflow_plugin.entities import Dataset
 
 DAG_ID = Path(__file__).name.removesuffix(".py")
-
-# Initialize Notifier
-slack_notifier = SlackNotifier(
-    channel="#data-alerts", conn_id="slack_api", redis_host="redis", redis_port=6379, redis_db=0
-)
 
 default_args = {
     "owner": "data_engineer",
@@ -22,6 +16,29 @@ default_args = {
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
+
+
+# ---------------------------------------------------------------------------
+# Lazy callback: DAG 파싱 시 SlackNotifier 인스턴스를 생성하지 않는다.
+# ---------------------------------------------------------------------------
+def _get_notifier():
+    from alerts.slack_notifier import SlackNotifier
+
+    return SlackNotifier(
+        channel="#data-alerts",
+        conn_id="slack_api",
+        redis_host="redis",
+        redis_port=6379,
+        redis_db=0,
+    )
+
+
+def on_failure(context):
+    _get_notifier().send_failure(context)
+
+
+def on_success(context):
+    _get_notifier().send_recovery(context)
 
 
 @task(task_id=f"{DAG_ID}.get_mapped_configs")
@@ -62,7 +79,6 @@ def generate_env() -> dict:
         "SPARK_HOME": "{{ var.value.SPARK_HOME }}",
         "HADOOP_CONF_DIR": "{{ var.value.HADOOP_CONF_DIR }}",
         "PYSPARK_PYTHON": "{{ var.value.PYSPARK_PYTHON }}",
-        # "SPARK_DIST_CLASSPATH": "{{ var.value.SPARK_DIST_CLASSPATH }}",
     }
 
     application_env = {
@@ -94,9 +110,8 @@ with DAG(
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    # DAG 레벨에 콜백 등록 (DAG 전체 실패 시 1회 호출)
-    on_failure_callback=slack_notifier.send_failure,
-    on_success_callback=slack_notifier.send_recovery,
+    on_failure_callback=on_failure,
+    on_success_callback=on_success,
 ) as dag:
     config_path = str(Path(__file__).parent.parent / "configs" / f"{DAG_ID}.yml")
     with open(config_path, encoding="utf-8") as f:
@@ -106,12 +121,8 @@ with DAG(
     all_inlets, all_outlets = generate_lineage(config)
 
     env_vars = generate_env()
-    aws_profile = Variable.get("AWS_PROFILE")
-    openlineage_url = Variable.get("OPENLINEAGE_URL")
-    openlineage_endpoint = Variable.get("OPENLINEAGE_ENDPOINT")
-    openlineage_api_key = Variable.get("OPENLINEAGE_API_KEY", "")
-    openlineage_spark_extra_listener = Variable.get("OPENLINEAGE_SPARK_EXTRA_LISTENER")
 
+    # Variable.get() → Jinja 템플릿으로 대체하여 파싱 시 DB 쿼리 제거
     spark_conf = {
         "spark.yarn.maxAppAttempts": "1",
         "spark.driver.cores": "1",
@@ -119,17 +130,15 @@ with DAG(
         "spark.executor.cores": "1",
         "spark.executor.memory": "1G",
         "spark.executor.instances": "1",
-        "spark.yarn.appMasterEnv.AWS_PROFILE": aws_profile,
-        "spark.executorEnv.AWS_PROFILE": aws_profile,
-        # OpenLineage Spark Listener 설정
-        "spark.extraListeners": openlineage_spark_extra_listener,
-        # OpenLineage Transport 설정
+        "spark.yarn.appMasterEnv.AWS_PROFILE": "{{ var.value.AWS_PROFILE }}",
+        "spark.executorEnv.AWS_PROFILE": "{{ var.value.AWS_PROFILE }}",
+        # OpenLineage Spark Listener
+        "spark.extraListeners": "{{ var.value.OPENLINEAGE_SPARK_EXTRA_LISTENER }}",
         "spark.openlineage.transport.type": "http",
-        "spark.openlineage.transport.url": openlineage_url,
-        "spark.openlineage.transport.endpoint": openlineage_endpoint,
+        "spark.openlineage.transport.url": "{{ var.value.OPENLINEAGE_URL }}",
+        "spark.openlineage.transport.endpoint": "{{ var.value.OPENLINEAGE_ENDPOINT }}",
         "spark.openlineage.transport.auth.type": "api_key",
-        "spark.openlineage.transport.auth.apiKey": openlineage_api_key,
-        # airflow.cfg 내 [openlineage] namespace=prod 설정 필수
+        "spark.openlineage.transport.auth.apiKey": "{{ var.value.OPENLINEAGE_API_KEY }}",
         "spark.openlineage.namespace": "prod",
         "spark.openlineage.appName": f"spark.prod.{DAG_ID}",
     }
