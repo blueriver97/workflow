@@ -1,4 +1,5 @@
 job:
+  concurrency: 3
   topics:
     - local.store.tb_lower
     - local.store.TB_UPPER

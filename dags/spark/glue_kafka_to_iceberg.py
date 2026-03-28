@@ -101,7 +101,10 @@ with DAG(
     with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    topics = config["job"]["topics"]
+    job_config = config["job"]
+    topics = job_config["topics"]
+    concurrency = str(job_config.get("concurrency", 3))
+    topics_csv = ",".join(topics)
     catalog = Variable.get("AWS_CATALOG", "catalog")
 
     all_inlets = []
@@ -142,7 +145,7 @@ with DAG(
         conn_id="spark_default",
         application="/opt/airflow/src/kafka_to_iceberg.py",
         py_files="/opt/airflow/src/utils.zip",
-        application_args=["--topics", str(",".join(topics))],
+        application_args=["--dag-id", DAG_ID, "--topics", topics_csv, "--concurrency", concurrency],
         env_vars=env_vars,
         conf=spark_conf,
         inlets=all_inlets,

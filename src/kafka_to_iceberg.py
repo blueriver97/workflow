@@ -1,6 +1,19 @@
+"""
+Kafka CDC → Iceberg Pipeline (토픽별 독립 스트림, 멀티스레드 병렬 처리)
+
+Airflow에서 spark-submit으로 실행:
+  spark-submit --py-files utils.zip kafka_to_iceberg.py --topics "prefix.schema.table1,prefix.schema.table2"
+
+S3 시그널 파일로 중단:
+  s3a://{bucket}/spark/signal/{dag_id} 파일이 존재하면 남은 토픽 처리를 건너뛴다.
+"""
+
 import json
 import sys
+import threading
+import time
 from argparse import ArgumentParser
+from dataclasses import dataclass
 from textwrap import dedent
 
 import pyspark.sql.functions as F
@@ -10,23 +23,115 @@ from pyspark import InheritableThread, StorageLevel
 from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql.avro.functions import from_avro
 
-# --- Import common modules ---
+from utils.listener import BatchProgressListener
 from utils.settings import Settings
+from utils.signal import build_signal_path, check_stop_signal
 from utils.spark_logging import SparkLoggerManager
+
+# ---------------------------------------------------------------------------
+# Watermark
+# ---------------------------------------------------------------------------
+
+
+def ensure_watermark_table(spark: SparkSession, config: Settings) -> None:
+    """ops_bronze.cdc_watermark 테이블이 없으면 생성한다."""
+    logger = SparkLoggerManager().get_logger()
+    full_table_name = f"{config.CATALOG}.ops_bronze.cdc_watermark"
+    if not spark.catalog.tableExists(full_table_name):
+        logger.info(f"Creating watermark table: {full_table_name}")
+        spark.sql(f"CREATE DATABASE IF NOT EXISTS {config.CATALOG}.ops_bronze")
+        spark.sql(f"""
+            CREATE TABLE {full_table_name} (
+                dag_id                  STRING,
+                bronze_schema           STRING,
+                table_name              STRING,
+                event_count             BIGINT,
+                max_event_ts            TIMESTAMP,
+                processed_at            TIMESTAMP,
+                min_offset              BIGINT,
+                max_offset              BIGINT,
+                batch_id                BIGINT,
+                processing_duration_sec DOUBLE
+            ) USING iceberg
+            TBLPROPERTIES (
+                'format-version' = '2',
+                'write.metadata.delete-after-commit.enabled' = 'true',
+                'write.metadata.previous-versions-max' = '5'
+            )
+        """)
+
+
+def upsert_watermark(
+    spark: SparkSession,
+    config: Settings,
+    dag_id: str,
+    bronze_schema: str,
+    table_name: str,
+    event_count: int,
+    max_event_ts,
+    min_offset: int | None = None,
+    max_offset: int | None = None,
+    batch_id: int | None = None,
+    processing_duration_sec: float | None = None,
+) -> None:
+    """cdc_watermark 테이블에 CDC 처리 기록을 upsert한다."""
+    logger = SparkLoggerManager().get_logger()
+    max_event_ts_expr = f"TIMESTAMP '{max_event_ts}'" if max_event_ts else "CAST(NULL AS TIMESTAMP)"
+    min_offset_expr = str(min_offset) if min_offset is not None else "CAST(NULL AS BIGINT)"
+    max_offset_expr = str(max_offset) if max_offset is not None else "CAST(NULL AS BIGINT)"
+    batch_id_expr = str(batch_id) if batch_id is not None else "CAST(NULL AS BIGINT)"
+    duration_expr = str(processing_duration_sec) if processing_duration_sec is not None else "CAST(NULL AS DOUBLE)"
+    spark.sql(f"""
+        MERGE INTO {config.CATALOG}.ops_bronze.cdc_watermark t
+        USING (
+            SELECT
+                '{dag_id}' AS dag_id,
+                '{bronze_schema}' AS bronze_schema,
+                '{table_name}' AS table_name,
+                {event_count} AS event_count,
+                {max_event_ts_expr} AS max_event_ts,
+                current_timestamp() AS processed_at,
+                {min_offset_expr} AS min_offset,
+                {max_offset_expr} AS max_offset,
+                {batch_id_expr} AS batch_id,
+                {duration_expr} AS processing_duration_sec
+        ) s
+        ON t.dag_id = s.dag_id
+           AND t.bronze_schema = s.bronze_schema
+           AND t.table_name = s.table_name
+        WHEN MATCHED THEN UPDATE SET
+            t.event_count = s.event_count,
+            t.max_event_ts = s.max_event_ts,
+            t.processed_at = s.processed_at,
+            t.min_offset = s.min_offset,
+            t.max_offset = s.max_offset,
+            t.batch_id = s.batch_id,
+            t.processing_duration_sec = s.processing_duration_sec
+        WHEN NOT MATCHED THEN INSERT *
+    """)
+    if processing_duration_sec is not None:
+        logger.info(
+            f"watermark: {bronze_schema}.{table_name}, "
+            f"events={event_count}, max_ts={max_event_ts}, "
+            f"offsets=[{min_offset}, {max_offset}], duration={processing_duration_sec:.1f}s"
+        )
+    else:
+        logger.info(f"watermark: {bronze_schema}.{table_name}, events={event_count}, max_ts={max_event_ts}")
+
+
+# ---------------------------------------------------------------------------
+# Debezium Schema / Type Casting
+# ---------------------------------------------------------------------------
 
 
 def extract_debezium_schema(schema: dict) -> dict:
-    """Debezium 메시지 스키마에서 컬럼 이름과 Debezium 커넥터 타입을 추출합니다."""
+    """Debezium 메시지 스키마에서 {컬럼명: 커넥터타입} 딕셔너리를 추출한다."""
     debezium_type = {}
-
-    # 1. Envelope 스키마의 'fields' 목록에서 'before' 또는 'after' 필드를 찾습니다.
     envelope_fields = schema.get("fields", [])
     value_schema = None
     for field in envelope_fields:
         if field.get("name") in ("before", "after"):
-            # 타입 정보는 ['null', {실제 스키마}] 형태일 수 있습니다.
-            type_definitions = field.get("type", [])
-            for type_def in type_definitions:
+            for type_def in field.get("type", []):
                 if isinstance(type_def, dict) and "fields" in type_def:
                     value_schema = type_def
                     break
@@ -34,47 +139,35 @@ def extract_debezium_schema(schema: dict) -> dict:
                 break
 
     if not value_schema:
-        print("Error: 'before' 또는 'after' 필드에서 유효한 스키마를 찾을 수 없습니다.")
         return {}
 
-    # 2. 찾은 스키마 내부의 'fields' (컬럼 목록)를 순회합니다.
-    column_fields = value_schema.get("fields", [])
-    for col_field in column_fields:
+    for col_field in value_schema.get("fields", []):
         col_name = col_field.get("name")
         if not col_name:
             continue
 
         type_info = col_field.get("type")
-
-        # 3. 컬럼 타입을 처리합니다. (Nullable 여부 고려)
         actual_type_def = None
         if isinstance(type_info, list):
-            # Nullable 타입: ['null', type] 형태에서 실제 타입 정보를 찾습니다.
             for item in type_info:
                 if item != "null":
                     actual_type_def = item
                     break
         else:
-            # Non-nullable 타입
             actual_type_def = type_info
 
         if not actual_type_def:
             continue
 
-        # 4. 최종 커넥터 타입을 추출합니다.
-        # 복합 타입(dict)인 경우 'connect.name'을 우선적으로 사용하고,
-        # 없는 경우 'type'을 사용합니다.
-        # 단순 타입(str)인 경우 해당 문자열을 그대로 사용합니다.
-        dbz_connector_type = None
         if isinstance(actual_type_def, dict):
-            dbz_connector_type = actual_type_def.get("connect.name")
-            if not dbz_connector_type:
-                dbz_connector_type = actual_type_def.get("type")
+            dbz_type = actual_type_def.get("connect.name") or actual_type_def.get("type")
         elif isinstance(actual_type_def, str):
-            dbz_connector_type = actual_type_def
+            dbz_type = actual_type_def
+        else:
+            dbz_type = None
 
-        if dbz_connector_type:
-            debezium_type[col_name] = dbz_connector_type
+        if dbz_type:
+            debezium_type[col_name] = dbz_type
 
     return debezium_type
 
@@ -104,10 +197,11 @@ def cast_column(column: Column, debezium_dtype: str) -> Column:
 
     Returns:
         변환된 Spark Column 객체
-    """
-    # Avro 스키마의 default: 0 때문에 강제 주입된 값을 걸러냅니다.
-    # column.isNotNull() 만으로는 부족하며, 반드시 (column != 0) 체크가 병행되어야 합니다.
 
+    Note:
+        Avro 스키마의 default: 0 때문에 강제 주입된 값을 걸러냅니다.
+        column.isNotNull() 만으로는 부족하며, 반드시 (column != 0) 체크가 병행되어야 합니다.
+    """
     if debezium_dtype == "io.debezium.time.Date":
         return F.date_add(F.lit("1970-01-01"), column.cast("int"))
     elif debezium_dtype == "io.debezium.time.MicroTime":
@@ -116,36 +210,69 @@ def cast_column(column: Column, debezium_dtype: str) -> Column:
         is_valid = column.isNotNull() & (column != 0)
         return F.when(is_valid, F.to_utc_timestamp(F.timestamp_millis(column), "Asia/Seoul")).otherwise(
             F.lit(None).cast(T.TimestampType())
-        )  # 0을 NULL로 강제 환원
+        )
     elif debezium_dtype == "io.debezium.time.ZonedTimestamp":
         pass
     return column
 
 
-def process_batch(
-    batch_df: DataFrame,
-    batch_id: int,
-    spark: SparkSession,
-    config: Settings,
-    schema_registry_client: SchemaRegistryClient,
-    topic: str,
-) -> None:
+# ---------------------------------------------------------------------------
+# Pipeline Context
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PipelineContext:
+    """배치마다 바뀌지 않는 파이프라인 실행 컨텍스트."""
+
+    spark: SparkSession
+    config: Settings
+    schema_registry_client: SchemaRegistryClient
+    topic: str
+    dag_id: str
+
+
+# ---------------------------------------------------------------------------
+# Batch Processing
+# ---------------------------------------------------------------------------
+
+
+def process_batch(batch_df: DataFrame, batch_id: int, ctx: PipelineContext) -> None:
+    spark = ctx.spark
     logger = SparkLoggerManager().get_logger()
-    logger.info(f"<batch-{batch_id}, {batch_df.count()}> Processing {topic}")
+    table_start_time = time.monotonic()
+
+    _prefix, schema, table = ctx.topic.split(".")
+    iceberg_schema = f"{schema.lower()}_bronze"
+    iceberg_table = table.lower()
+    full_table_name = f"{ctx.config.CATALOG}.{iceberg_schema}.{iceberg_table}"
+
+    logger.info(f"<batch-{batch_id}> Processing {ctx.topic}")
+
     if batch_df.isEmpty():
+        upsert_watermark(
+            spark,
+            ctx.config,
+            ctx.dag_id,
+            iceberg_schema,
+            iceberg_table,
+            event_count=0,
+            max_event_ts=None,
+            batch_id=batch_id,
+        )
         return
 
     batch_df.persist(StorageLevel.MEMORY_AND_DISK)
 
-    # 1. 스키마 레지스트리에서 스키마 조회
+    # 스키마 레지스트리 조회
     value_schema_ids = [row.value_schema_id for row in batch_df.select("value_schema_id").distinct().collect()]
-    value_schema_dict = {sid: schema_registry_client.get_schema(sid).schema_str for sid in value_schema_ids}
+    value_schema_dict = {sid: ctx.schema_registry_client.get_schema(sid).schema_str for sid in value_schema_ids}
     key_schema_ids = [row.key_schema_id for row in batch_df.select("key_schema_id").distinct().collect()]
-    key_schema_dict = {sid: schema_registry_client.get_schema(sid).schema_str for sid in key_schema_ids}
+    key_schema_dict = {sid: ctx.schema_registry_client.get_schema(sid).schema_str for sid in key_schema_ids}
 
-    logger.info(f"Processing {topic} | Key Schema Ids: {key_schema_ids} | Value Schema Ids: {value_schema_ids}")
+    logger.info(f"{ctx.topic} | Key Schema Ids: {key_schema_ids} | Value Schema Ids: {value_schema_ids}")
 
-    # 2. 스키마 버전별 데이터 변환 및 Iceberg 적재
+    # 스키마 버전별 데이터 변환 및 Iceberg 적재
     for value_schema_id, value_schema_str in value_schema_dict.items():
         schema_filtered_df = batch_df.filter(F.col("value_schema_id") == value_schema_id)
         value_schema = json.loads(value_schema_str)
@@ -164,7 +291,7 @@ def process_batch(
         key_schema = json.loads(key_schema_str)
         pk_cols = [field["name"] for field in key_schema["fields"]]
 
-        # Avro 역직렬화 및 기본 변환
+        # Avro 역직렬화 및 변환
         transformed_df = (
             schema_filtered_df.withColumn("key", from_avro(F.col("key"), key_schema_str, {"mode": "FAILFAST"}))
             .withColumn("value", from_avro(F.col("value"), value_schema_str, {"mode": "FAILFAST"}))
@@ -181,17 +308,13 @@ def process_batch(
             )
         )
 
-        # 3. Iceberg 테이블 처리 (기존 process_table 로직 통합)
-        prefix, schema, table = topic.split(".")
-        iceberg_schema, iceberg_table = f"{schema.lower()}_bronze", table.lower()
-        full_table_name = f"{config.CATALOG}.{iceberg_schema}.{iceberg_table}"
+        # Iceberg 테이블 스키마 조회 및 캐스팅
         try:
             catalog_schema = spark.table(full_table_name).schema
         except Exception:
-            logger.warn(f"Table {full_table_name} not found. Skipping batch for this schema version.")
+            logger.warn(f"Table {full_table_name} not found. Skipping.")
             continue
 
-        # 최종 타입 캐스팅
         cdc_df = transformed_df.select(
             *[
                 cast_column(F.col(f.name), debezium_schema.get(f.name, "")).cast(f.dataType).alias(f.name)
@@ -201,7 +324,7 @@ def process_batch(
             "__offset",
         )
 
-        # 중복 제거
+        # 중복 제거 (동일 키에 대해 최신 오프셋만 유지)
         window_spec = Window.partitionBy("id_iceberg").orderBy(F.desc("__offset"))
         dedup_df = (
             cdc_df.withColumn("__row", F.row_number().over(window_spec))
@@ -219,39 +342,79 @@ def process_batch(
             update_expr = ", ".join([f"t.{c} = s.{c}" for c in columns])
             insert_cols = ", ".join(columns)
             insert_vals = ", ".join([f"s.{c}" for c in columns])
-            merge_query = dedent(f"""
+            logger.info(f"Executing Merge Into for {full_table_name}")
+            spark.sql(
+                dedent(f"""
                 MERGE INTO {full_table_name} t
                 USING (SELECT * FROM global_temp.upsert_view_{table}) s
                 ON t.id_iceberg = s.id_iceberg
                 WHEN MATCHED THEN UPDATE SET {update_expr}
                 WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})
             """)
-            logger.info(f"Executing Merge Into for {full_table_name}")
-            spark.sql(merge_query)
+            )
 
         # Delete
         if not delete_df.isEmpty():
             delete_df.createOrReplaceGlobalTempView(f"delete_view_{table}")
-            delete_query = dedent(f"""
-                DELETE FROM {full_table_name} t
-                WHERE EXISTS (SELECT s.id_iceberg FROM global_temp.delete_view_{table} s WHERE s.id_iceberg = t.id_iceberg)
-             """)
             logger.info(f"Executing Delete for {full_table_name}")
-            spark.sql(delete_query)
+            spark.sql(
+                dedent(f"""
+                DELETE FROM {full_table_name} t
+                WHERE EXISTS (
+                    SELECT s.id_iceberg FROM global_temp.delete_view_{table} s
+                    WHERE s.id_iceberg = t.id_iceberg
+                )
+            """)
+            )
+
+    # Watermark 기록
+    table_duration = time.monotonic() - table_start_time
+    stats = batch_df.agg(
+        F.count("*").alias("cnt"),
+        F.max("timestamp").alias("max_ts"),
+        F.min("offset").alias("min_offset"),
+        F.max("offset").alias("max_offset"),
+    ).collect()[0]
 
     batch_df.unpersist()
 
+    upsert_watermark(
+        spark,
+        ctx.config,
+        ctx.dag_id,
+        iceberg_schema,
+        iceberg_table,
+        event_count=stats["cnt"],
+        max_event_ts=stats["max_ts"],
+        min_offset=stats["min_offset"],
+        max_offset=stats["max_offset"],
+        batch_id=batch_id,
+        processing_duration_sec=table_duration,
+    )
 
-def run_topic_stream(spark: SparkSession, settings: Settings, topic: str):
+
+# ---------------------------------------------------------------------------
+# Stream Runner
+# ---------------------------------------------------------------------------
+
+
+def run_topic_stream(spark: SparkSession, settings: Settings, topic: str, dag_id: str) -> None:
     logger = SparkLoggerManager().get_logger()
+
+    if not settings.kafka:
+        raise ValueError("Kafka configuration is missing.")
 
     checkpoint_path = f"{settings.WAREHOUSE}/checkpoints/kafka_to_iceberg/{topic}"
     logger.info(f"Starting stream for topic: {topic}, checkpoint: {checkpoint_path}")
 
-    if not settings.kafka:
-        raise ValueError("Kafka configuration is missing. Please check your settings.")
+    ctx = PipelineContext(
+        spark=spark,
+        config=settings,
+        schema_registry_client=SchemaRegistryClient({"url": settings.kafka.schema_registry}),
+        topic=topic,
+        dag_id=dag_id,
+    )
 
-    schema_registry_client = SchemaRegistryClient({"url": settings.kafka.schema_registry})
     kafka_df = (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", settings.kafka.bootstrap_servers)
@@ -267,10 +430,8 @@ def run_topic_stream(spark: SparkSession, settings: Settings, topic: str):
         .withColumn("key", F.expr("substring(key, 6, length(key)-5)"))
         .withColumn("value_schema_id", F.expr("byte_to_int(substring(value, 2, 4))"))
         .withColumn("value", F.expr("substring(value, 6, length(value)-5)"))
-        .selectExpr("key_schema_id", "value_schema_id", "key", "value", "topic", "offset")
-        .writeStream.foreachBatch(
-            lambda batch_df, batch_id: process_batch(batch_df, batch_id, spark, settings, schema_registry_client, topic)
-        )
+        .selectExpr("key_schema_id", "value_schema_id", "key", "value", "topic", "offset", "timestamp")
+        .writeStream.foreachBatch(lambda batch_df, batch_id: process_batch(batch_df, batch_id, ctx))
         .option("checkpointLocation", checkpoint_path)
         .queryName(topic)
         .outputMode("append")
@@ -280,11 +441,20 @@ def run_topic_stream(spark: SparkSession, settings: Settings, topic: str):
     query.awaitTermination()
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--topics", type=str)
+    parser.add_argument(
+        "--dag-id", type=str, required=True, help="파이프라인 식별자 (watermark, signal, metrics에 사용)"
+    )
+    parser.add_argument("--topics", type=str, required=True)
+    parser.add_argument("--concurrency", type=int, default=3, help="동시 처리 토픽 수 (기본값: 3)")
     args = parser.parse_args()
     settings = Settings()
+    dag_id = args.dag_id
 
     topics = args.topics.split(",")
     spark = (
@@ -306,34 +476,51 @@ if __name__ == "__main__":
         .config("spark.shuffle.service.removeShuffle", "true")
         .config("spark.python.use.pinned.thread", "true")
         .config("spark.scheduler.mode", "FAIR")
-        # .config("spark.metrics.namespace", settings.kafka.metric_namespace)
         .getOrCreate()
     )
 
     # 로거 초기화
     logger_manager = SparkLoggerManager()
     logger_manager.setup(spark)
+    logger = logger_manager.get_logger()
 
-    # UDF 등록: Byte Array -> Integer (Schema ID 추출용)
+    # 리스너 등록 (마이크로 배치별 진행 로깅)
+    spark.streams.addListener(BatchProgressListener())
+
+    # UDF 등록
     spark.udf.register("byte_to_int", lambda x: int.from_bytes(x, byteorder="big", signed=False))
 
+    # CDC Watermark 테이블 초기화
+    ensure_watermark_table(spark, settings)
+
+    # S3 시그널 파일 확인 (s3a://{bucket}/spark/signal/{dag_id})
+    stop_signal_path = build_signal_path(settings.aws.s3_bucket, dag_id)
+    if check_stop_signal(spark, stop_signal_path):
+        logger.warn(f"Stop signal detected at {stop_signal_path}. Exiting.")
+        spark.stop()
+        sys.exit(0)
+
     exceptions = []
+    semaphore = threading.Semaphore(args.concurrency)
+    logger.info(f"Processing {len(topics)} topics with concurrency={args.concurrency}")
 
     def wrapper(t_spark, t_settings, t_topic):
-        try:
-            # 리니지 분리를 위한 ID 설정
-            spark.sparkContext.setLocalProperty("spark.scheduler.pool", topic)
-            spark.sparkContext.setLocalProperty("datahub.task.id", topic)
-            spark.sparkContext.setJobGroup(topic, f"Processing {topic}")
-            run_topic_stream(t_spark, t_settings, t_topic)
-        except Exception as e:
-            SparkLoggerManager().get_logger().error(f"Failed to process topic: {t_topic}")
-            exceptions.append(e)
+        with semaphore:
+            try:
+                if check_stop_signal(t_spark, stop_signal_path):
+                    SparkLoggerManager().get_logger().warn(f"Stop signal detected. Skipping topic: {t_topic}")
+                    return
+
+                t_spark.sparkContext.setLocalProperty("spark.scheduler.pool", t_topic)
+                t_spark.sparkContext.setLocalProperty("datahub.task.id", t_topic)
+                t_spark.sparkContext.setJobGroup(t_topic, f"Processing {t_topic}")
+                run_topic_stream(t_spark, t_settings, t_topic, dag_id)
+            except Exception as e:
+                SparkLoggerManager().get_logger().error(f"Failed to process topic: {t_topic}, error: {e}")
+                exceptions.append(e)
 
     threads = []
     for topic in topics:
-        # InheritableThread 사용 (PySpark 3.1+ 지원)
-        # 스레드 로컬 속성(SparkContext.localProperties)을 자식 스레드로 상속
         t = InheritableThread(target=wrapper, args=(spark, settings, topic))
         t.start()
         threads.append(t)
@@ -342,7 +529,7 @@ if __name__ == "__main__":
         t.join()
 
     if exceptions:
-        SparkLoggerManager().get_logger().error("Job failed due to exceptions in worker threads.")
+        logger.error(f"Job failed: {len(exceptions)} topic(s) had errors.")
         sys.exit(1)
 
     spark.stop()
