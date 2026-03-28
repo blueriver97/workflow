@@ -25,7 +25,7 @@ from pyspark.sql.avro.functions import from_avro
 
 from utils.listener import BatchProgressListener
 from utils.settings import Settings
-from utils.signal import build_signal_path, check_stop_signal
+from utils.signal import build_signal_path, check_stop_signal, cleanup_stop_signal
 from utils.spark_logging import SparkLoggerManager
 
 # ---------------------------------------------------------------------------
@@ -563,17 +563,17 @@ if __name__ == "__main__":
     logger_manager.setup(spark)
     logger = logger_manager.get_logger()
 
-    # 리스너 등록 (마이크로 배치별 진행 로깅)
-    spark.streams.addListener(BatchProgressListener())
+    # S3 시그널 파일 확인 (s3a://{bucket}/spark/signal/{dag_id})
+    stop_signal_path = build_signal_path(settings.aws.s3_bucket, dag_id)
+
+    # 리스너 등록 (마이크로 배치별 진행 로깅 + 시그널 감지)
+    spark.streams.addListener(BatchProgressListener(signal_spark=spark, signal_path=stop_signal_path))
 
     # UDF 등록
     spark.udf.register("byte_to_int", lambda x: int.from_bytes(x, byteorder="big", signed=False))
 
     # CDC Watermark 테이블 초기화
     ensure_watermark_table(spark, settings)
-
-    # S3 시그널 파일 확인 (s3a://{bucket}/spark/signal/{dag_id})
-    stop_signal_path = build_signal_path(settings.aws.s3_bucket, dag_id)
     if check_stop_signal(spark, stop_signal_path):
         logger.warn(f"Stop signal detected at {stop_signal_path}. Exiting.")
         spark.stop()
@@ -611,4 +611,5 @@ if __name__ == "__main__":
         logger.error(f"Job failed: {len(exceptions)} topic(s) had errors.")
         sys.exit(1)
 
+    cleanup_stop_signal(spark, stop_signal_path)
     spark.stop()
