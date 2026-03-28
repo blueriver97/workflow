@@ -1,0 +1,6 @@
+job:
+  num_partition: 1
+  tables:
+    - store.tb_lower
+    - store.TB_UPPER
+    - store.TB_COMPOSITE_KEY

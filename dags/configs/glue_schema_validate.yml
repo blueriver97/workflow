@@ -1,0 +1,16 @@
+job:
+  database_type: mysql
+  vault_secret_path: secret/data/user/database/local-mysql
+  tables:
+    - store.tb_lower
+    - store.TB_UPPER
+    - store.TB_COMPOSITE_KEY
+
+# --- SQL Server 예시 ---
+# job:
+#   database_type: sqlserver
+#   vault_secret_path: secret/data/user/database/local-sqlserver
+#   tables:
+#     - store.dbo.tb_lower
+#     - store.dbo.TB_UPPER
+#     - store.dbo.TB_COMPOSITE_KEY

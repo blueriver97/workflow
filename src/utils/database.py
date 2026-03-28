@@ -1,8 +1,99 @@
-import pyspark.sql.functions as F  # noqa
+import re
 from abc import ABC, abstractmethod
-from textwrap import dedent
 from collections import OrderedDict
+from textwrap import dedent
+
+import pyspark.sql.functions as F  # noqa
+import pyspark.sql.types as T
 from pyspark.sql import DataFrame, SparkSession
+
+# --- Type Mappings ---
+MYSQL_TYPE_MAPPING = {
+    "char": T.StringType(),
+    "varchar": T.StringType(),
+    "text": T.StringType(),
+    "tinytext": T.StringType(),
+    "mediumtext": T.StringType(),
+    "longtext": T.StringType(),
+    "tinyint": T.IntegerType(),
+    "smallint": T.IntegerType(),
+    "mediumint": T.IntegerType(),
+    "int": T.IntegerType(),
+    "int unsigned": T.LongType(),
+    "bigint": T.LongType(),
+    "float": T.DoubleType(),
+    "double": T.DoubleType(),
+    "decimal": lambda p, s: T.DecimalType(precision=int(p), scale=int(s)),
+    "boolean": T.BooleanType(),
+    "blob": T.BinaryType(),
+    "tinyblob": T.BinaryType(),
+    "mediumblob": T.BinaryType(),
+    "longblob": T.BinaryType(),
+    "time": T.TimestampType(),
+    "date": T.DateType(),
+    "datetime": T.TimestampType(),
+    "timestamp": T.TimestampType(),
+    "enum": T.StringType(),
+    "set": T.StringType(),
+    "json": T.StringType(),
+}
+
+MSSQL_TYPE_MAPPING = {
+    "bigint": T.LongType(),
+    "int": T.IntegerType(),
+    "smallint": T.ShortType(),
+    "tinyint": T.ByteType(),
+    "bit": T.BooleanType(),
+    "decimal": T.DecimalType(38, 10),
+    "numeric": T.DecimalType(38, 10),
+    "money": T.DecimalType(19, 4),
+    "smallmoney": T.DecimalType(10, 4),
+    "float": T.DoubleType(),
+    "real": T.FloatType(),
+    "date": T.DateType(),
+    "datetime": T.TimestampType(),
+    "datetime2": T.TimestampType(),
+    "smalldatetime": T.TimestampType(),
+    "time": T.StringType(),
+    "char": T.StringType(),
+    "varchar": T.StringType(),
+    "text": T.StringType(),
+    "nchar": T.StringType(),
+    "nvarchar": T.StringType(),
+    "ntext": T.StringType(),
+    "binary": T.BinaryType(),
+    "varbinary": T.BinaryType(),
+    "image": T.BinaryType(),
+    "uniqueidentifier": T.StringType(),
+    "xml": T.StringType(),
+    "sql_variant": T.StringType(),
+}
+
+
+def convert_db_type_to_spark(column_type: str, db_type: str) -> T.DataType:
+    """데이터베이스 컬럼 타입 문자열을 Spark DataType으로 변환합니다."""
+    type_map = MYSQL_TYPE_MAPPING if db_type == "mysql" else MSSQL_TYPE_MAPPING
+    type_name_match = re.match(r"^\w+(?:\s+\w+)?", column_type.lower().strip())
+
+    if type_name_match:
+        type_name = type_name_match.group(0)
+        # MySQL decimal(p,s) 처리
+        if type_name == "decimal" and db_type == "mysql":
+            params = re.findall(r"\d+", column_type)
+            if len(params) >= 2:
+                return type_map[type_name](params[0], params[1])
+            elif len(params) == 1:
+                return type_map[type_name](params[0], 0)
+
+        if type_name in type_map:
+            return type_map[type_name]
+
+        # "int unsigned" 같은 2단어 타입이 매칭 안 되면 첫 단어로 재시도
+        first_word = type_name.split()[0] if " " in type_name else None
+        if first_word and first_word in type_map:
+            return type_map[first_word]
+
+    return T.StringType()
 
 
 class BaseDatabaseManager(ABC):
@@ -42,6 +133,21 @@ class BaseDatabaseManager(ABC):
     @abstractmethod
     def get_metadata(self, spark: SparkSession, table_name: str) -> dict[str, str]:
         # 테이블 메타데이터 조회
+        pass
+
+    @abstractmethod
+    def get_column_comments(self, spark: SparkSession, table_name: str) -> dict[str, str]:
+        # 컬럼별 주석 조회 {column_name: comment}
+        pass
+
+    @abstractmethod
+    def get_table_comment(self, spark: SparkSession, table_name: str) -> str | None:
+        # 테이블 주석 조회
+        pass
+
+    @abstractmethod
+    def get_nullable_info(self, spark: SparkSession, table_name: str) -> dict[str, bool]:
+        # 컬럼별 nullable 정보 조회 {column_name: is_nullable}
         pass
 
 
@@ -118,6 +224,39 @@ class MySQLManager(BaseDatabaseManager):
         df = self._execute_jdbc_query(spark, options, query)
         return {col.lower(): str(row[col]) for col in df.columns for row in df.collect()}
 
+    def get_column_comments(self, spark: SparkSession, table_name: str) -> dict[str, str]:
+        options = self.get_jdbc_options()
+        query = dedent(f"""
+            SELECT COLUMN_NAME, COLUMN_COMMENT
+            FROM information_schema.COLUMNS
+            WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) = '{table_name}'
+            ORDER BY ORDINAL_POSITION
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        return {row.COLUMN_NAME: row.COLUMN_COMMENT for row in df.collect()}
+
+    def get_table_comment(self, spark: SparkSession, table_name: str) -> str | None:
+        options = self.get_jdbc_options()
+        query = dedent(f"""
+            SELECT TABLE_COMMENT
+            FROM information_schema.TABLES
+            WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) = '{table_name}'
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        row = df.first()
+        return row.TABLE_COMMENT if row and row.TABLE_COMMENT else None
+
+    def get_nullable_info(self, spark: SparkSession, table_name: str) -> dict[str, bool]:
+        options = self.get_jdbc_options()
+        query = dedent(f"""
+            SELECT COLUMN_NAME, IS_NULLABLE
+            FROM information_schema.COLUMNS
+            WHERE CONCAT_WS('.', TABLE_SCHEMA, TABLE_NAME) = '{table_name}'
+            ORDER BY ORDINAL_POSITION
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        return {row.COLUMN_NAME: row.IS_NULLABLE == "YES" for row in df.collect()}
+
 
 class SQLServerManager(BaseDatabaseManager):
     """
@@ -182,7 +321,7 @@ class SQLServerManager(BaseDatabaseManager):
         return OrderedDict([(row.COLUMN_NAME, row.COLUMN_TYPE) for row in df.collect()])
 
     def get_metadata(self, spark: SparkSession, table_name: str) -> dict[str, str]:
-        db_name, _, table_name = table_name.split(".")
+        db_name, _, tbl = table_name.split(".")
         options = self.get_jdbc_options(db_name)
         query = dedent(f"""
             SELECT p.rows        AS TABLE_ROWS,
@@ -192,7 +331,7 @@ class SQLServerManager(BaseDatabaseManager):
             FROM sys.tables AS t
                      INNER JOIN sys.indexes AS i
                                 ON t.object_id = i.object_id
-                                    AND t.object_id = OBJECT_ID(CONCAT('dbo.', '{table_name}'))
+                                    AND t.object_id = OBJECT_ID(CONCAT('dbo.', '{tbl}'))
                      INNER JOIN sys.partitions AS p
                                 ON i.object_id = p.object_id
                                     AND i.index_id = p.index_id
@@ -202,3 +341,49 @@ class SQLServerManager(BaseDatabaseManager):
         """)
         df = self._execute_jdbc_query(spark, options, query)
         return {col.lower(): str(row[col]) for col in df.columns for row in df.collect()}
+
+    def get_column_comments(self, spark: SparkSession, table_name: str) -> dict[str, str]:
+        db_name, _, tbl = table_name.split(".")
+        options = self.get_jdbc_options(db_name)
+        query = dedent(f"""
+            SELECT c.name AS COLUMN_NAME,
+                   CAST(ep.value AS NVARCHAR(4000)) AS COLUMN_COMMENT
+            FROM sys.columns c
+                INNER JOIN sys.tables t ON c.object_id = t.object_id
+                LEFT JOIN sys.extended_properties ep
+                    ON ep.major_id = c.object_id
+                    AND ep.minor_id = c.column_id
+                    AND ep.name = 'MS_Description'
+            WHERE t.name = '{tbl}'
+            ORDER BY c.column_id
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        return {row.COLUMN_NAME: (row.COLUMN_COMMENT or "") for row in df.collect()}
+
+    def get_table_comment(self, spark: SparkSession, table_name: str) -> str | None:
+        db_name, _, tbl = table_name.split(".")
+        options = self.get_jdbc_options(db_name)
+        query = dedent(f"""
+            SELECT CAST(ep.value AS NVARCHAR(4000)) AS TABLE_COMMENT
+            FROM sys.tables t
+                INNER JOIN sys.extended_properties ep
+                    ON ep.major_id = t.object_id
+                    AND ep.minor_id = 0
+                    AND ep.name = 'MS_Description'
+            WHERE t.name = '{tbl}'
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        row = df.first()
+        return row.TABLE_COMMENT if row and row.TABLE_COMMENT else None
+
+    def get_nullable_info(self, spark: SparkSession, table_name: str) -> dict[str, bool]:
+        db_name = table_name.split(".")[0]
+        options = self.get_jdbc_options(db_name)
+        query = dedent(f"""
+            SELECT COLUMN_NAME, IS_NULLABLE
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE CONCAT(TABLE_CATALOG, '.dbo.', TABLE_NAME) = '{table_name}'
+            ORDER BY ORDINAL_POSITION
+        """)
+        df = self._execute_jdbc_query(spark, options, query)
+        return {row.COLUMN_NAME: row.IS_NULLABLE == "YES" for row in df.collect()}

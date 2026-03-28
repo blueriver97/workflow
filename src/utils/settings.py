@@ -26,6 +26,7 @@ class AwsSettings(BaseModel):
     catalog: str = Field(description="Iceberg catalog name")
     s3_bucket: str = Field(description="S3 bucket name")
     iceberg_path: str = Field(description="Iceberg table path")
+    parquet_path: str = Field(default="/data/raw", description="Raw Parquet storage path")
 
 
 class KafkaSettings(BaseModel):
@@ -113,6 +114,10 @@ class Settings(BaseSettings):
     @property
     def WAREHOUSE(self):
         return "s3a://" + self.aws.s3_bucket + self.aws.iceberg_path
+
+    @property
+    def PARQUET_WAREHOUSE(self):
+        return "s3a://" + self.aws.s3_bucket + self.aws.parquet_path
 
 
 # if __name__ == "__main__":

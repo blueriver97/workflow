@@ -1,0 +1,7 @@
+job:
+  retention_days: 1
+  retain_last: 5
+  target_file_size_bytes: 134217728
+  min_file_size_bytes: 100663296
+  schemas:
+    - store_bronze
