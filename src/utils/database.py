@@ -21,7 +21,7 @@ MYSQL_TYPE_MAPPING = {
     "int": T.IntegerType(),
     "int unsigned": T.LongType(),
     "bigint": T.LongType(),
-    "float": T.DoubleType(),
+    "float": T.FloatType(),
     "double": T.DoubleType(),
     "decimal": lambda p, s: T.DecimalType(precision=int(p), scale=int(s)),
     "boolean": T.BooleanType(),
@@ -77,6 +77,12 @@ def convert_db_type_to_spark(column_type: str, db_type: str) -> T.DataType:
 
     if type_name_match:
         type_name = type_name_match.group(0)
+        # MySQL tinyint(1) → BooleanType (JDBC 드라이버 동작과 일치)
+        if type_name == "tinyint" and db_type == "mysql":
+            params = re.findall(r"\d+", column_type)
+            if params and params[0] == "1":
+                return T.BooleanType()
+
         # MySQL decimal(p,s) 처리
         if type_name == "decimal" and db_type == "mysql":
             params = re.findall(r"\d+", column_type)
@@ -160,7 +166,7 @@ class MySQLManager(BaseDatabaseManager):
         # MySQL 연결 옵션 생성
         db = self.config.database
         options = {
-            "url": f"jdbc:mysql://{db.host}:{db.port}/{database}?zeroDateTimeBehavior=convertToNull",
+            "url": f"jdbc:mysql://{db.host}:{db.port}/{database}?zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=UTF-8",
             "driver": "com.mysql.cj.jdbc.Driver",
             "user": db.user,
             "password": db.password.get_secret_value(),

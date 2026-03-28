@@ -84,11 +84,15 @@ def sync_column_comments(
     full_table_name = f"{config.CATALOG}.{bronze_schema}.{target_table}"
 
     source_comments = db_manager.get_column_comments(spark, table_name)
-    iceberg_cols = {f.name.lower() for f in spark.table(full_table_name).schema.fields}
+    iceberg_fields = {f.name.lower(): f for f in spark.table(full_table_name).schema.fields}
 
     synced = 0
     for col_name, comment in source_comments.items():
-        if not comment or col_name.lower() not in iceberg_cols:
+        if not comment or col_name.lower() not in iceberg_fields:
+            continue
+        # Iceberg 기존 주석과 비교하여 다른 경우에만 동기화
+        iceberg_comment = iceberg_fields[col_name.lower()].metadata.get("comment", "")
+        if iceberg_comment == comment:
             continue
         escaped = comment.replace("'", "\\'")
         spark.sql(f"ALTER TABLE {full_table_name} ALTER COLUMN `{col_name}` COMMENT '{escaped}'")
@@ -163,12 +167,24 @@ def sync_table_comment(
     full_table_name = f"{config.CATALOG}.{bronze_schema}.{target_table}"
 
     comment = db_manager.get_table_comment(spark, table_name)
-    if comment:
-        escaped = comment.replace("'", "\\'")
-        spark.sql(f"COMMENT ON TABLE {full_table_name} IS '{escaped}'")
-        logger.info(f"[{table_name}] Table comment synced: '{comment}'")
-    else:
+    if not comment:
         logger.info(f"[{table_name}] No table comment to sync")
+        return
+
+    # Iceberg 기존 테이블 주석과 비교 (Glue Catalog은 comment를 Description 필드에 저장)
+    desc_df = spark.sql(f"DESCRIBE TABLE EXTENDED {full_table_name}").filter("col_name = 'Comment'")
+    iceberg_comment = ""
+    if not desc_df.isEmpty():
+        row = desc_df.first()
+        if row and row.data_type:
+            iceberg_comment = row.data_type
+    if iceberg_comment == comment:
+        logger.info(f"[{table_name}] Table comment unchanged, skipping")
+        return
+
+    escaped = comment.replace("'", "\\'")
+    spark.sql(f"ALTER TABLE {full_table_name} SET TBLPROPERTIES ('comment' = '{escaped}')")
+    logger.info(f"[{table_name}] Table comment synced: '{comment}'")
 
 
 def process_schema_validate(

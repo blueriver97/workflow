@@ -15,7 +15,7 @@ def test_mysql_basic_types():
     assert isinstance(convert_db_type_to_spark("bigint", "mysql"), T.LongType)
     assert isinstance(convert_db_type_to_spark("smallint", "mysql"), T.IntegerType)
     assert isinstance(convert_db_type_to_spark("tinyint", "mysql"), T.IntegerType)
-    assert isinstance(convert_db_type_to_spark("float", "mysql"), T.DoubleType)
+    assert isinstance(convert_db_type_to_spark("float", "mysql"), T.FloatType)
     assert isinstance(convert_db_type_to_spark("double", "mysql"), T.DoubleType)
     assert isinstance(convert_db_type_to_spark("boolean", "mysql"), T.BooleanType)
 
@@ -37,6 +37,12 @@ def test_mysql_temporal_types():
     assert isinstance(convert_db_type_to_spark("datetime", "mysql"), T.TimestampType)
     assert isinstance(convert_db_type_to_spark("timestamp", "mysql"), T.TimestampType)
     assert isinstance(convert_db_type_to_spark("time", "mysql"), T.TimestampType)
+
+
+def test_mysql_tinyint1_boolean():
+    assert isinstance(convert_db_type_to_spark("tinyint(1)", "mysql"), T.BooleanType)
+    assert isinstance(convert_db_type_to_spark("tinyint", "mysql"), T.IntegerType)
+    assert isinstance(convert_db_type_to_spark("tinyint(4)", "mysql"), T.IntegerType)
 
 
 def test_mysql_decimal():
