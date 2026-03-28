@@ -45,7 +45,7 @@ def process_sqlserver_to_iceberg(
     if len(parts) == 3:
         schema, _, table = parts
     else:
-        raise ValueError(f"Invalid table name format: '{table_name}'. Expected 'db.table'.")
+        raise ValueError(f"Invalid table name format: '{table_name}'. Expected 'db.schema.table'.")
 
     bronze_schema = f"{schema.lower()}_bronze"
     target_table = table.lower()
@@ -86,7 +86,9 @@ def process_sqlserver_to_iceberg(
     jdbc_df = jdbc_df.withColumn("last_applied_date", F.current_timestamp())
 
     # 데이터베이스 생성
-    spark.sql(f"CREATE DATABASE IF NOT EXISTS {config.CATALOG}.{bronze_schema}")
+    spark.sql(
+        f"CREATE DATABASE IF NOT EXISTS {config.CATALOG}.{bronze_schema} LOCATION '{config.WAREHOUSE}/{bronze_schema}'"
+    )
 
     logger.info(f"Creating or replacing {full_table_name}")
     # Note. Merge On Read / Accept-Schema 활성화 시 아래 옵션 추가 필요.

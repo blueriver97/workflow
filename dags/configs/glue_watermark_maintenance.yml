@@ -1,0 +1,3 @@
+job:
+  # 보관 기간 (일). 이보다 오래된 watermark 레코드를 삭제한다.
+  retention_days: 7

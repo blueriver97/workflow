@@ -39,7 +39,10 @@ def ensure_watermark_table(spark: SparkSession, config: Settings) -> None:
     full_table_name = f"{config.CATALOG}.ops_bronze.cdc_watermark"
     if not spark.catalog.tableExists(full_table_name):
         logger.info(f"Creating watermark table: {full_table_name}")
-        spark.sql(f"CREATE DATABASE IF NOT EXISTS {config.CATALOG}.ops_bronze")
+        spark.sql(f"""
+            CREATE DATABASE IF NOT EXISTS {config.CATALOG}.ops_bronze
+            LOCATION '{config.WAREHOUSE}/ops_bronze'
+        """)
         spark.sql(f"""
             CREATE TABLE {full_table_name} (
                 dag_id                  STRING,
@@ -53,6 +56,7 @@ def ensure_watermark_table(spark: SparkSession, config: Settings) -> None:
                 batch_id                BIGINT,
                 processing_duration_sec DOUBLE
             ) USING iceberg
+            LOCATION '{config.WAREHOUSE}/ops_bronze/cdc_watermark'
             TBLPROPERTIES (
                 'format-version' = '2',
                 'write.metadata.delete-after-commit.enabled' = 'true',
@@ -61,7 +65,53 @@ def ensure_watermark_table(spark: SparkSession, config: Settings) -> None:
         """)
 
 
-def upsert_watermark(
+def _build_watermark_values(
+    dag_id: str,
+    bronze_schema: str,
+    table_name: str,
+    event_count: int,
+    max_event_ts,
+    min_offset: int | None,
+    max_offset: int | None,
+    batch_id: int | None,
+    processing_duration_sec: float | None,
+) -> str:
+    """watermark INSERT/MERGE에 사용할 SELECT 절을 생성한다."""
+    max_event_ts_expr = f"TIMESTAMP '{max_event_ts}'" if max_event_ts else "CAST(NULL AS TIMESTAMP)"
+    min_offset_expr = str(min_offset) if min_offset is not None else "CAST(NULL AS BIGINT)"
+    max_offset_expr = str(max_offset) if max_offset is not None else "CAST(NULL AS BIGINT)"
+    batch_id_expr = str(batch_id) if batch_id is not None else "CAST(NULL AS BIGINT)"
+    duration_expr = str(processing_duration_sec) if processing_duration_sec is not None else "CAST(NULL AS DOUBLE)"
+    return f"""
+        SELECT
+            '{dag_id}' AS dag_id,
+            '{bronze_schema}' AS bronze_schema,
+            '{table_name}' AS table_name,
+            {event_count} AS event_count,
+            {max_event_ts_expr} AS max_event_ts,
+            current_timestamp() AS processed_at,
+            {min_offset_expr} AS min_offset,
+            {max_offset_expr} AS max_offset,
+            {batch_id_expr} AS batch_id,
+            {duration_expr} AS processing_duration_sec
+    """
+
+
+def _log_watermark(
+    bronze_schema, table_name, event_count, max_event_ts, min_offset, max_offset, processing_duration_sec
+):
+    logger = SparkLoggerManager().get_logger()
+    if processing_duration_sec is not None:
+        logger.info(
+            f"watermark: {bronze_schema}.{table_name}, "
+            f"events={event_count}, max_ts={max_event_ts}, "
+            f"offsets=[{min_offset}, {max_offset}], duration={processing_duration_sec:.1f}s"
+        )
+    else:
+        logger.info(f"watermark: {bronze_schema}.{table_name}, events={event_count}, max_ts={max_event_ts}")
+
+
+def append_watermark(
     spark: SparkSession,
     config: Settings,
     dag_id: str,
@@ -74,28 +124,62 @@ def upsert_watermark(
     batch_id: int | None = None,
     processing_duration_sec: float | None = None,
 ) -> None:
-    """cdc_watermark 테이블에 CDC 처리 기록을 upsert한다."""
-    logger = SparkLoggerManager().get_logger()
-    max_event_ts_expr = f"TIMESTAMP '{max_event_ts}'" if max_event_ts else "CAST(NULL AS TIMESTAMP)"
-    min_offset_expr = str(min_offset) if min_offset is not None else "CAST(NULL AS BIGINT)"
-    max_offset_expr = str(max_offset) if max_offset is not None else "CAST(NULL AS BIGINT)"
-    batch_id_expr = str(batch_id) if batch_id is not None else "CAST(NULL AS BIGINT)"
-    duration_expr = str(processing_duration_sec) if processing_duration_sec is not None else "CAST(NULL AS DOUBLE)"
+    """cdc_watermark 테이블에 CDC 처리 기록을 append한다.
+
+    동시 쓰기 시 Iceberg 스냅샷 충돌이 발생하지 않는다.
+    최신 상태 조회 시 (dag_id, bronze_schema, table_name) 기준
+    processed_at DESC로 첫 번째 행을 사용한다.
+    """
+    values = _build_watermark_values(
+        dag_id,
+        bronze_schema,
+        table_name,
+        event_count,
+        max_event_ts,
+        min_offset,
+        max_offset,
+        batch_id,
+        processing_duration_sec,
+    )
+    spark.sql(f"INSERT INTO {config.CATALOG}.ops_bronze.cdc_watermark {values}")
+    _log_watermark(
+        bronze_schema, table_name, event_count, max_event_ts, min_offset, max_offset, processing_duration_sec
+    )
+
+
+def merge_watermark(
+    spark: SparkSession,
+    config: Settings,
+    dag_id: str,
+    bronze_schema: str,
+    table_name: str,
+    event_count: int,
+    max_event_ts,
+    min_offset: int | None = None,
+    max_offset: int | None = None,
+    batch_id: int | None = None,
+    processing_duration_sec: float | None = None,
+) -> None:
+    """cdc_watermark 테이블에 CDC 처리 기록을 upsert한다.
+
+    단일 writer 환경에서만 사용한다. 동시 쓰기 시 Iceberg 스냅샷 충돌이
+    발생할 수 있으므로, 멀티스레드/멀티프로세스 환경에서는 append_watermark를 사용한다.
+    """
+    full_table = f"{config.CATALOG}.ops_bronze.cdc_watermark"
+    values = _build_watermark_values(
+        dag_id,
+        bronze_schema,
+        table_name,
+        event_count,
+        max_event_ts,
+        min_offset,
+        max_offset,
+        batch_id,
+        processing_duration_sec,
+    )
     spark.sql(f"""
-        MERGE INTO {config.CATALOG}.ops_bronze.cdc_watermark t
-        USING (
-            SELECT
-                '{dag_id}' AS dag_id,
-                '{bronze_schema}' AS bronze_schema,
-                '{table_name}' AS table_name,
-                {event_count} AS event_count,
-                {max_event_ts_expr} AS max_event_ts,
-                current_timestamp() AS processed_at,
-                {min_offset_expr} AS min_offset,
-                {max_offset_expr} AS max_offset,
-                {batch_id_expr} AS batch_id,
-                {duration_expr} AS processing_duration_sec
-        ) s
+        MERGE INTO {full_table} t
+        USING ({values}) s
         ON t.dag_id = s.dag_id
            AND t.bronze_schema = s.bronze_schema
            AND t.table_name = s.table_name
@@ -109,14 +193,9 @@ def upsert_watermark(
             t.processing_duration_sec = s.processing_duration_sec
         WHEN NOT MATCHED THEN INSERT *
     """)
-    if processing_duration_sec is not None:
-        logger.info(
-            f"watermark: {bronze_schema}.{table_name}, "
-            f"events={event_count}, max_ts={max_event_ts}, "
-            f"offsets=[{min_offset}, {max_offset}], duration={processing_duration_sec:.1f}s"
-        )
-    else:
-        logger.info(f"watermark: {bronze_schema}.{table_name}, events={event_count}, max_ts={max_event_ts}")
+    _log_watermark(
+        bronze_schema, table_name, event_count, max_event_ts, min_offset, max_offset, processing_duration_sec
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +329,7 @@ def process_batch(batch_df: DataFrame, batch_id: int, ctx: PipelineContext) -> N
     logger.info(f"<batch-{batch_id}> Processing {ctx.topic}")
 
     if batch_df.isEmpty():
-        upsert_watermark(
+        append_watermark(
             spark,
             ctx.config,
             ctx.dag_id,
@@ -371,14 +450,14 @@ def process_batch(batch_df: DataFrame, batch_id: int, ctx: PipelineContext) -> N
     table_duration = time.monotonic() - table_start_time
     stats = batch_df.agg(
         F.count("*").alias("cnt"),
-        F.max("timestamp").alias("max_ts"),
+        F.date_format(F.max("timestamp"), "yyyy-MM-dd HH:mm:ss.SSSSSS").alias("max_ts"),
         F.min("offset").alias("min_offset"),
         F.max("offset").alias("max_offset"),
     ).collect()[0]
 
     batch_df.unpersist()
 
-    upsert_watermark(
+    append_watermark(
         spark,
         ctx.config,
         ctx.dag_id,

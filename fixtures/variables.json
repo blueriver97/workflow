@@ -1,8 +1,8 @@
 {
   "AWS_CATALOG": "awsdatacatalog",
   "AWS_ICEBERG_PATH": "/iceberg",
-  "AWS_PROFILE": "default",
-  "AWS_S3_BUCKET": "blueriver-datalake",
+  "AWS_PROFILE": "dev",
+  "AWS_S3_BUCKET": "hunet-di-data-lake-dev",
   "HADOOP_CONF_DIR": "/opt/hadoop/etc/hadoop",
   "KAFKA_BOOTSTRAP_SERVERS": "kafka.svc.internal:9092",
   "KAFKA_SCHEMA_REGISTRY": "http://schema-registry.svc.internal:8081",
