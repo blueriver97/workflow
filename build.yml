@@ -1,10 +1,11 @@
 services:
   airflow:
-    image: blueriver97/airflow:3.1.5
+    image: blueriver97/airflow:${AIRFLOW_VERSION}
     build:
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile
       context: .
       args:
+        AIRFLOW_VERSION: $AIRFLOW_VERSION
         SPARK_VERSION: $SPARK_VERSION
       platforms:
         - linux/amd64

@@ -5,7 +5,11 @@ import yaml
 from airflow import DAG
 from airflow.models import Variable
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
-from airflow.sdk import task
+
+try:
+    from airflow.sdk import task
+except ImportError:
+    from airflow.decorators import task
 from datahub_airflow_plugin.entities import Dataset
 
 DAG_ID = Path(__file__).name.removesuffix(".py")

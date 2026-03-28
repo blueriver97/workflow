@@ -9,7 +9,7 @@ while IFS='=' read -r key value; do
         HADOOP_VERSION=$value
         echo "$key=$value"
     fi
-done < ../.env
+done < ../../.env
 
 # apache-airflow-providers-apache-spark 설치 시 pyspark도 같이 설치되는데, 설치된 pyspark 버전은 Yarn 클러스터의 의존성과는 관계 없음 확인.
 # (2026-02-10) Yarn 클러스터를 구성하는 Hadoop 버전와 /opt/spark/jars 내 hadoop 버전이 맞아야 함.

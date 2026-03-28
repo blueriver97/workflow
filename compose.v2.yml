@@ -1,0 +1,39 @@
+# Airflow 2.x override
+# Usage: docker-compose -f compose.yml -f compose.v2.yml up -d
+---
+x-v2: &v2
+  image: blueriver97/airflow:2.11.2
+  environment:
+    AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+
+services:
+  airflow-webserver:
+    extends:
+      file: compose.yml
+      service: airflow-scheduler
+    <<: *v2
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler: { <<: *v2 }
+  airflow-worker: { <<: *v2 }
+  airflow-triggerer: { <<: *v2 }
+  airflow-init: { <<: *v2 }
+  airflow-cli: { <<: *v2 }
+  flower: { <<: *v2 }

@@ -1,0 +1,52 @@
+# Worker 전용 노드 오버라이드
+#
+# 사전 조건:
+#   1. NFS 마운트: 마스터의 프로젝트 디렉토리를 워커 노드에 마운트
+#      master:/path/to/project  /opt/airflow/project  nfs  defaults  0  0
+#   2. 워커 노드 .env 설정:
+#      MASTER_HOST=192.168.x.x
+#      AIRFLOW_PROJ_DIR=/opt/airflow/project
+#
+# Usage:
+#   마스터: docker-compose -f compose.yml -f compose.v2.yml up -d
+#   워커:   docker-compose -f compose.yml -f compose.v2.yml -f compose.worker.yml up -d
+---
+services:
+  # 마스터 노드 서비스 비활성화
+  postgres:
+    profiles: ["_never"]
+  redis:
+    profiles: ["_never"]
+  airflow-scheduler:
+    profiles: ["_never"]
+  airflow-init:
+    profiles: ["_never"]
+  airflow-triggerer:
+    profiles: ["_never"]
+  airflow-cli:
+    profiles: ["_never"]
+  flower:
+    profiles: ["_never"]
+  airflow-webserver:
+    profiles: ["_never"]
+  airflow-apiserver:
+    profiles: ["_never"]
+  airflow-dag-processor:
+    profiles: ["_never"]
+
+  # 워커: 마스터의 DB/Redis를 바라보고, NFS로 마운트된 코드를 사용
+  airflow-worker:
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@${MASTER_HOST}:5432/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@${MASTER_HOST}:5432/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@${MASTER_HOST}:6379/0
+    depends_on:
+      postgres:
+        condition: service_started
+        required: false
+      redis:
+        condition: service_started
+        required: false
+      airflow-init:
+        condition: service_started
+        required: false

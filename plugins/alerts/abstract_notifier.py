@@ -1,7 +1,13 @@
 from abc import abstractmethod
+from typing import Any
 
-from airflow.sdk import Context
 from airflow.utils.log.logging_mixin import LoggingMixin
+
+# Airflow 2.x: airflow.sdk 모듈 없음 → dict로 대체
+try:
+    from airflow.sdk import Context
+except ImportError:
+    Context = dict[str, Any]
 
 
 class Notifier(LoggingMixin):

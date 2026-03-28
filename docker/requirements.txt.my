@@ -23,5 +23,5 @@ apache-airflow-providers-openlineage
 apache-airflow-providers-amazon[s3fs]
 
 # datahub
-acryl-datahub-airflow-plugin>=1.1.0.4
+acryl-datahub-airflow-plugin>=1.5.0
 acryl-datahub-classify
