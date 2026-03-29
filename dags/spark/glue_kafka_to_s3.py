@@ -73,9 +73,6 @@ def generate_env() -> dict:
         "KAFKA__METRIC_NAMESPACE": "metric_namespace",
         "KAFKA__MAX_OFFSETS_PER_TRIGGER": "1000000",
         "KAFKA__STARTING_OFFSETS": "earliest",
-        # Signal file 경로를 Spark 앱에 전달
-        "SIGNAL__BUCKET": "{{ var.value.AWS_S3_BUCKET }}",
-        "SIGNAL__KEY": f"spark/signal/{DAG_ID}",
     }
     env.update(application_env)
 

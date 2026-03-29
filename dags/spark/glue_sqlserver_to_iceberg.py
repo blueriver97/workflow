@@ -95,12 +95,6 @@ def generate_env() -> dict:
         "AWS__CATALOG": "{{ var.value.AWS_CATALOG }}",
         "AWS__S3_BUCKET": "{{ var.value.AWS_S3_BUCKET }}",
         "AWS__ICEBERG_PATH": "{{ var.value.AWS_ICEBERG_PATH }}",
-        "KAFKA__BOOTSTRAP_SERVERS": "{{ var.value.KAFKA_BOOTSTRAP_SERVERS }}",
-        "KAFKA__SCHEMA_REGISTRY": "{{ var.value.KAFKA_SCHEMA_REGISTRY }}",
-        "KAFKA__TOPIC_PREFIX": "topic_prefix",
-        "KAFKA__METRIC_NAMESPACE": "metric_namespace",
-        "KAFKA__MAX_OFFSETS_PER_TRIGGER": "1000000",
-        "KAFKA__STARTING_OFFSETS": "earliest",
     }
     env.update(application_env)
 
