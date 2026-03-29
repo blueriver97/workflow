@@ -32,7 +32,7 @@ x-airflow-common: &airflow-common
     YARN_RM_SCHEDULER_ADDRESS_RM01: ${YARN_RM_SCHEDULER_ADDRESS_RM01}
     YARN_RM_SCHEDULER_ADDRESS_RM02: ${YARN_RM_SCHEDULER_ADDRESS_RM02}
     # Openlineage
-    AIRFLOW__OPENLINEAGE__DISABLED: true
+    AIRFLOW__OPENLINEAGE__DISABLED: "true"
   entrypoint:
     - /bin/bash
     - -c
